@@ -4,31 +4,40 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { json } from 'express';
 
 async function bootstrap() {
-  // bufferLogs ayuda a no perder logs al inicio en entornos como Railway
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create(AppModule, { 
+    bufferLogs: true,
+    logger: ['error', 'warn', 'log'] // Asegura logs visibles
+  });
 
-  // Payloads grandes (ajusta si necesitas más)
+  // Payloads grandes
   app.use(json({ limit: '10mb' }));
 
-  // CORS abierto (ajusta origin si quieres restringir)
+  // CORS abierto
   app.enableCors({ origin: true, credentials: true });
 
-  // Swagger (si prefieres ocultarlo en prod, pon el if de NODE_ENV)
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Documentación de la API')
-    .setDescription('API generada automáticamente para todas las carpetas y controladores')
-    .setVersion('1.0')
-    .addTag('API')
-    .build();
+  // 🔥 CRITICAL: Swagger solo en desarrollo (causa lentitud en prod)
+  if (process.env.NODE_ENV !== 'production') {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Documentación de la API')
+      .setDescription('API generada automáticamente')
+      .setVersion('1.0')
+      .addTag('API')
+      .build();
 
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api', app, document); // https://<host>/api
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('api', app, document);
+  }
 
-  // 🚀 Puerto dinámico de Railway (+ fallback local) y host 0.0.0.0
+  // Puerto dinámico de Railway
   const port = parseInt(process.env.PORT ?? '3000', 10);
+  
   await app.listen(port, '0.0.0.0');
 
-  console.log(`API escuchando en puerto ${port}`);
+  console.log(`✅ API corriendo en puerto ${port}`);
+  console.log(`🌍 Health check: http://localhost:${port}/`);
 }
 
-bootstrap();
+bootstrap().catch(err => {
+  console.error('❌ Error fatal al iniciar:', err);
+  process.exit(1);
+});
