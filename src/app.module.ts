@@ -91,11 +91,11 @@ import { CortesUsuariosModule } from './corte-caja/cortes-usuarios.module';
     TypeOrmModule.forRoot({
       name: 'db1', // Primera conexión
       type: 'mysql',
-      host: 'autorack.proxy.rlwy.net',
-      port: 49173,
+      host: 'switchyard.proxy.rlwy.net',
+      port: 11528,
       username: 'root',
-      password: 'azvEhIDvYpHwXbhEbfhjjGApaplnYSup',
-      database: 'ajustesfactoresriesgo',
+      password: 'efCrJOQYzgfqpsAYJyEZMjzIvnPlITin',
+      database: 'prase-db',
       entities: [usuarios, grupos, aplicaciones, grupos_has_usuarios, PaqueteCoberturas, BitacoraEliminaciones, BitacoraEdiciones, Coberturas, PaqueteCobertura_Cobertura, Deducibles, Cobertura_Deducible, TiposSumaAsegurada, ConfiguracionesSistema, ReglasNegocio, CondicionesReglas, AplicacionReglas, AjustePorCodigoPostal, Clientes, Vehiculos, ApplicationsGrupos, Cotizacion, DetallesCotizacionPoliza, TiposDeducible, TiposMoneda, UsosVehiculo,TiposVehiculo, TipoPago,Poliza,PolizaHistorial,TipoEmpleado,Empleado,MetodosPago,EstatusPago,PagosPoliza,DocumentosRequeridos,DocumentosDigitalizados, CuentasBancarias, Sucursal, IniciosCaja,Transacciones,CortesUsuarios],
       synchronize: false,
       cache: false,
