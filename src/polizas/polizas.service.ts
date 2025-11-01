@@ -36,7 +36,7 @@ export class PolizasService {
     private readonly pagosPolizaRepository: Repository<PagosPoliza>,
     private readonly bitacoraEdicionesService: BitacoraEdicionesService,
     private readonly bitacoraEliminacionesService: BitacoraEliminacionesService,
-  ) {}
+  ) { }
 
   async create(createPolizaDto: CreatePolizaDto): Promise<Poliza> {
     const { CotizacionID, TipoPagoID, VehiculoID, ClienteID, ...polizaData } =
@@ -175,8 +175,8 @@ export class PolizasService {
     // Buscar y actualizar el tipo de pago si se incluye en el DTO
     const tipoPago = updatePolizaDto.TipoPagoID
       ? await this.tipoPagoRepository.findOne({
-          where: { TipoPagoID: updatePolizaDto.TipoPagoID },
-        })
+        where: { TipoPagoID: updatePolizaDto.TipoPagoID },
+      })
       : polizaExistente.tipoPago;
 
     if (updatePolizaDto.TipoPagoID && !tipoPago) {
@@ -273,7 +273,7 @@ export class PolizasService {
     return `Poliza con Folio ${poliza.NumeroPoliza} cancelada exitosamente.`;
   }
 
-  async generarEsquemaPagos(identificador: { folio: string }): Promise<any> {
+  /*async generarEsquemaPagos(identificador: { folio: string }): Promise<any> {
     console.log('Identificador recibido:', identificador);
 
     // Validar y sanitizar el folio para evitar inyecciones SQL
@@ -553,7 +553,247 @@ export class PolizasService {
       primerPago,
       pagosSubsecuentes,
     };
+  }*/
+
+  async generarEsquemaPagos(identificador: { folio: string }): Promise<any> {
+    console.log('Identificador recibido:', identificador);
+
+    // 0) Validación folio
+    if (!identificador.folio || !validator.isAlphanumeric(identificador.folio)) {
+      throw new HttpException('El folio proporcionado no es válido', HttpStatus.BAD_REQUEST);
+    }
+    const folioSanitizado = validator.escape(identificador.folio.trim());
+
+    // 1) Traer póliza + relaciones
+    const poliza = await this.polizasRepository.findOne({
+      where: { NumeroPoliza: folioSanitizado },
+      relations: ['detalles', 'historial', 'tipoPago', 'cotizacion'],
+    });
+
+    console.log('Póliza completa:', poliza);
+    console.log('Tipo de Pago:', poliza?.tipoPago);
+    console.log('Porcentaje Ajuste:', poliza?.tipoPago?.PorcentajeAjuste);
+
+    if (!poliza) throw new HttpException('Póliza no encontrada', HttpStatus.NOT_FOUND);
+
+    if (poliza.EstadoPoliza !== 'PERIODO DE GRACIA' && poliza.EstadoPoliza !== 'ACTIVA') {
+      throw new HttpException(
+        'La póliza no está activa y no se puede generar el esquema de pagos',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // Helpers
+    const round2 = (x: number) => Math.round((x + Number.EPSILON) * 100) / 100;
+
+    const periodoGracia = Number(poliza.cotizacion?.PeriodoGracia || 0);
+    const numeroPagos = Number(poliza.NumeroPagos);
+    const primaTotal = Number(poliza.PrimaTotal);
+    const totalSinIVA = Number(poliza.TotalSinIVA);
+    const derechoPolizaAplicado = Number(poliza.DerechoPolizaAplicado || 0);
+    const descuentoProntoPago = Number(poliza.DescuentoProntoPago || 0);
+    const porcentajeAjuste = Number(poliza.tipoPago?.PorcentajeAjuste || 0);
+
+    if (!poliza.FechaEmision || isNaN(numeroPagos) || isNaN(primaTotal) || numeroPagos <= 0) {
+      throw new HttpException(
+        'La póliza no tiene los datos necesarios para generar un esquema de pagos',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // 2) Periodo de gracia (mensaje)
+    let mensajeAtraso: string | null = null;
+    if (poliza.EstadoPoliza === 'PERIODO DE GRACIA') {
+      const fechaInicioPoliza = new Date(poliza.FechaInicio);
+      const fechaLimiteGracia = new Date(fechaInicioPoliza);
+      fechaLimiteGracia.setDate(fechaLimiteGracia.getDate() + periodoGracia);
+
+      const fechaActual = new Date();
+      fechaActual.setHours(0, 0, 0, 0);
+
+      if (fechaLimiteGracia < fechaActual) {
+        mensajeAtraso = 'El período de gracia ha terminado. No se ha realizado el pago correspondiente.';
+      }
+    }
+
+    // 3) Cálculos base (tu fórmula original)
+    const ajusteDecimal = 1 + porcentajeAjuste / 100;
+    const totalPorPago = totalSinIVA / numeroPagos;
+    const totalConDerechoPoliza = totalPorPago + derechoPolizaAplicado;
+    const totalConAjuste = totalConDerechoPoliza * ajusteDecimal;
+    const totalConIVA = totalConAjuste * 1.16;
+
+    const primerPago = round2(totalConIVA);
+    const pagosSubsecuentes = numeroPagos > 1 ? round2((primaTotal - primerPago) / (numeroPagos - 1)) : round2(primaTotal);
+
+    // 4) Construcción de fechas objetivo (usa tu frecuencia: 12/numeroPagos meses)
+    let fechaPago = new Date(poliza.FechaEmision);
+    fechaPago.setDate(fechaPago.getDate() + periodoGracia);
+    fechaPago = new Date(fechaPago.getFullYear(), fechaPago.getMonth(), fechaPago.getDate(), 0, 0, 0, 0);
+
+    const fechas: Date[] = [];
+    for (let i = 0; i < numeroPagos; i++) {
+      fechas.push(new Date(fechaPago));
+      // Avanza por “frecuencia” (= 12/numeroPagos meses); asume divisor entero de 12
+      const step = 12 / numeroPagos; // mensual/semestral/trimestral/anual...
+      const next = new Date(fechaPago);
+      next.setMonth(next.getMonth() + step);
+      fechaPago = next;
+    }
+
+    // 5) Armar esquema con objetivo "histórico" (para marcar atrasos correctamente)
+    const esquemaPagos = Array.from({ length: numeroPagos }, (_, i) => ({
+      numeroPago: i + 1,
+      fechaPago: fechas[i].toISOString(),
+      montoObjetivo: i === 0 ? primerPago : pagosSubsecuentes, // objetivo NOMINAL histórico
+      montoAplicado: 0,
+      estado: 'Pendiente' as 'Pendiente' | 'Parcial' | 'Pagado' | 'Pendiente de Validación' | 'Atrasado',
+      pagosRealizados: [] as { montoPagado: number; fechaReal: string }[],
+    }));
+
+    // 6) Traer pagos realizados y separar:
+    const pagosRealizados = await this.pagosPolizaRepository.find({
+      where: { PolizaID: poliza.PolizaID },
+      relations: ['EstatusPago'],
+      order: { FechaPago: 'ASC' },
+    });
+
+    // Excluir CANCELADOS (3); “Pendiente de Validación (4)” NO cuenta como pagado
+    const pagosValidos = pagosRealizados.filter(
+      (p) => p.EstatusPago?.IDEstatusPago !== 3 && (p.Validado === true || p.EstatusPago?.IDEstatusPago === 1),
+    );
+
+    // 7) Aplicar pagos válidos AL ESQUEMA HISTÓRICO por calendario (secuencial)
+    let pagadoAcumulado = 0;
+    for (const p of pagosValidos) {
+      let porAplicar = Number(p.MontoPagado || 0);
+      if (porAplicar <= 0) continue;
+
+      for (let i = 0; i < esquemaPagos.length && porAplicar > 0; i++) {
+        const objetivo = esquemaPagos[i].montoObjetivo;
+        const aplicado = esquemaPagos[i].montoAplicado;
+        const faltante = round2(Math.max(objetivo - aplicado, 0));
+        if (faltante <= 0) continue;
+
+        const aplicarAhora = round2(Math.min(faltante, porAplicar));
+        esquemaPagos[i].montoAplicado = round2(aplicado + aplicarAhora);
+        esquemaPagos[i].pagosRealizados.push({
+          montoPagado: aplicarAhora,
+          fechaReal: new Date(p.FechaPago).toISOString(), // 🔹 convertir Date → string
+        });
+        porAplicar = round2(porAplicar - aplicarAhora);
+        pagadoAcumulado = round2(pagadoAcumulado + aplicarAhora);
+      }
+    }
+
+    // 8) Recalcular monto objetivo de los periodos FUTUROS
+    //    Lo ya pasado se queda con su objetivo histórico para poder marcar Atrasos.
+    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+    const indicesFuturos = esquemaPagos
+      .map((it, i) => ({ i, f: new Date(it.fechaPago) }))
+      .filter(({ f }) => f.getTime() >= hoy.getTime())
+      .map(({ i }) => i);
+
+    // Saldo restante dinámico (NO contar pendientes de validación como pagados)
+    const restanteGlobal = Math.max(round2(primaTotal - pagadoAcumulado), 0);
+    const futurosCount = Math.max(indicesFuturos.length, 0);
+
+    // Reasignar SOLO futuros: repartir restante en partes iguales
+    if (futurosCount > 0) {
+      const cuota = round2(restanteGlobal / futurosCount);
+      // Para compensar redondeos, reparte y ajusta el último
+      let sumaAsignada = 0;
+      indicesFuturos.forEach((idx, k) => {
+        if (k < futurosCount - 1) {
+          esquemaPagos[idx].montoObjetivo = cuota;
+          sumaAsignada = round2(sumaAsignada + cuota);
+        } else {
+          // último = restanteGlobal - sumaAsignada (para cerrar exacto)
+          esquemaPagos[idx].montoObjetivo = round2(Math.max(restanteGlobal - sumaAsignada, 0));
+        }
+      });
+    } else {
+      // No hay futuros; si queda restanteGlobal > 0, habrá atrasos/parciales en pasados.
+    }
+
+    // 9) Estados finales por periodo
+    const intervaloDias = this.calcularIntervaloDias(numeroPagos);
+    let conteoAtrasos = 0;
+
+    for (const item of esquemaPagos) {
+      const fechaInicioPer = new Date(item.fechaPago);
+      const fechaFinPer = new Date(fechaInicioPer);
+      fechaFinPer.setDate(fechaFinPer.getDate() + intervaloDias);
+
+      const tienePendValid = pagosRealizados.some(
+        (pr) =>
+          new Date(pr.FechaPago).getTime() >= fechaInicioPer.getTime() &&
+          new Date(pr.FechaPago).getTime() < fechaFinPer.getTime() &&
+          pr.EstatusPago?.IDEstatusPago === 4,
+      );
+
+      const faltante = round2(Math.max(item.montoObjetivo - item.montoAplicado, 0));
+
+      if (tienePendValid) {
+        item.estado = 'Pendiente de Validación';
+      } else if (faltante <= 0.009) {
+        item.estado = 'Pagado';
+      } else {
+        // Si ya pasó el periodo, marcar como Atrasado; si no, Pendiente/Parcial
+        const yaPaso = new Date().getTime() > fechaFinPer.getTime();
+        if (yaPaso) {
+          // Si tiene algo aplicado pero no cumplió => Parcial (pero con atraso)
+          if (item.montoAplicado > 0) {
+            item.estado = 'Parcial';
+          } else {
+            item.estado = 'Atrasado';
+          }
+          conteoAtrasos++;
+        } else {
+          item.estado = item.montoAplicado > 0 ? 'Parcial' : 'Pendiente';
+        }
+      }
+    }
+
+    if (conteoAtrasos > 0) {
+      mensajeAtraso = mensajeAtraso
+        ? `${mensajeAtraso}. CLIENTE PRESENTA ATRASO DE ${conteoAtrasos} PERIODOS`
+        : `CLIENTE PRESENTA ATRASO DE ${conteoAtrasos} PERIODOS`;
+    }
+
+    // 10) Pagos fuera de rango (info)
+    //     Ya no “rompen” el esquema: se aplican a saldo global y luego redistribuimos futuros.
+    //     Aun así, devolvemos la lista informativa si quieres mostrarla.
+    const pagosFueraDeRango = pagosValidos.filter((pago) =>
+      esquemaPagos.every((slot) => {
+        const ini = new Date(slot.fechaPago);
+        const fin = new Date(ini); fin.setDate(fin.getDate() + intervaloDias);
+        const t = new Date(pago.FechaPago).getTime();
+        return !(t >= ini.getTime() && t < fin.getTime());
+      }),
+    );
+
+    // Totales
+    const totalPagado = round2(pagadoAcumulado);
+
+    return {
+      fechaInicio: poliza.FechaInicio,
+      fechaFin: poliza.FechaFin,
+      esquemaPagos,
+      pagosFueraDeRango: pagosFueraDeRango.map((p) => ({
+        montoPagado: Number(p.MontoPagado),
+        fechaPago: p.FechaPago,
+      })),
+      totalPrima: round2(primaTotal),
+      totalPagado,
+      restante: round2(Math.max(primaTotal - totalPagado, 0)),
+      descuentoProntoPago: descuentoProntoPago > 0 ? descuentoProntoPago : null,
+      mensajeAtraso,
+      primerPago,
+      pagosSubsecuentes,
+    };
   }
+
 
   private calcularIntervaloDias(numeroPagos: number): number {
     switch (numeroPagos) {

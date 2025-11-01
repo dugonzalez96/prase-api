@@ -40,7 +40,7 @@ export class PagosPolizaService {
 
     @InjectRepository(BitacoraEliminaciones, 'db1')
     private readonly bitacoraEliminacionesRepository: Repository<BitacoraEliminaciones>,
-  ) {}
+  ) { }
 
   async create(createDto: CreatePagosPolizaDto): Promise<PagosPoliza> {
     const {
@@ -104,8 +104,8 @@ export class PagosPolizaService {
 
     const estatusPago = createDto.IDEstatusPago
       ? await this.estatusPagoRepository.findOne({
-          where: { IDEstatusPago: createDto.IDEstatusPago },
-        })
+        where: { IDEstatusPago: createDto.IDEstatusPago },
+      })
       : null;
 
     if (createDto.IDEstatusPago && !estatusPago) {
@@ -150,8 +150,8 @@ export class PagosPolizaService {
 
     const usuarioValido = createDto.UsuarioValidoID
       ? await this.usuariosRepository.findOne({
-          where: { UsuarioID: createDto.UsuarioValidoID },
-        })
+        where: { UsuarioID: createDto.UsuarioValidoID },
+      })
       : null;
 
     if (createDto.UsuarioValidoID && !usuarioValido) {
@@ -163,8 +163,8 @@ export class PagosPolizaService {
 
     const cuentaBancaria = createDto.CuentaBancariaID
       ? await this.cuentasBancariasRepository.findOne({
-          where: { CuentaBancariaID: createDto.CuentaBancariaID },
-        })
+        where: { CuentaBancariaID: createDto.CuentaBancariaID },
+      })
       : null;
 
     if (createDto.CuentaBancariaID && !cuentaBancaria) {
@@ -304,8 +304,8 @@ export class PagosPolizaService {
 
     const metodoPago = updateDto.IDMetodoPago
       ? await this.metodosPagoRepository.findOne({
-          where: { IDMetodoPago: updateDto.IDMetodoPago },
-        })
+        where: { IDMetodoPago: updateDto.IDMetodoPago },
+      })
       : pago.MetodoPago;
 
     if (!metodoPago) {
@@ -318,8 +318,8 @@ export class PagosPolizaService {
     // Validación de UsuarioValidoID
     const usuarioValido = updateDto.UsuarioValidoID
       ? await this.usuariosRepository.findOne({
-          where: { UsuarioID: updateDto.UsuarioValidoID },
-        })
+        where: { UsuarioID: updateDto.UsuarioValidoID },
+      })
       : null;
 
     if (updateDto.UsuarioValidoID && !usuarioValido) {
@@ -332,8 +332,8 @@ export class PagosPolizaService {
     // Validación de CuentaBancariaID
     const cuentaBancaria = updateDto.CuentaBancariaID
       ? await this.cuentasBancariasRepository.findOne({
-          where: { CuentaBancariaID: updateDto.CuentaBancariaID },
-        })
+        where: { CuentaBancariaID: updateDto.CuentaBancariaID },
+      })
       : null;
 
     if (updateDto.CuentaBancariaID && !cuentaBancaria) {
@@ -369,8 +369,8 @@ export class PagosPolizaService {
 
     const estatusPago = updateDto.IDEstatusPago
       ? await this.estatusPagoRepository.findOne({
-          where: { IDEstatusPago: updateDto.IDEstatusPago },
-        })
+        where: { IDEstatusPago: updateDto.IDEstatusPago },
+      })
       : pago.EstatusPago;
 
     const camposModificados = {};
@@ -469,5 +469,46 @@ export class PagosPolizaService {
     }
     poliza.TotalPagos = Math.max((Number(poliza.TotalPagos) || 1) - 1, 0); // Convertir a número antes de restar y evitar valores negativos
     await this.polizasRepository.save(poliza);
+  }
+
+  /**
+ * Devuelve los pagos NO validados con método de pago distinto de EFECTIVO (ID=3).
+ * Filtros opcionales por rango de fechas, usuario y póliza.
+ */
+  async getPagosSinValidarNoEfectivo(params?: {
+    fechaInicio?: Date;
+    fechaFin?: Date;
+    usuarioID?: number;
+    polizaID?: number;
+  }): Promise<PagosPoliza[]> {
+    const qb = this.pagosPolizaRepository
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.MetodoPago', 'mp')
+      .leftJoinAndSelect('p.EstatusPago', 'ep')
+      .leftJoinAndSelect('p.Usuario', 'u')
+      .leftJoinAndSelect('p.UsuarioValido', 'uv')
+      .leftJoinAndSelect('p.CuentaBancaria', 'cb')
+      .where('p.Validado = :validado', { validado: false })
+      .andWhere('mp.IDMetodoPago != :efectivo', { efectivo: 3 })
+      .andWhere('(p.MotivoCancelacion IS NULL OR p.MotivoCancelacion = \'\')');
+
+    if (params?.fechaInicio && params?.fechaFin) {
+      qb.andWhere('p.FechaMovimiento BETWEEN :ini AND :fin', {
+        ini: params.fechaInicio,
+        fin: params.fechaFin,
+      });
+    }
+
+    if (params?.usuarioID) {
+      qb.andWhere('u.UsuarioID = :usuarioID', { usuarioID: params.usuarioID });
+    }
+
+    if (params?.polizaID) {
+      qb.andWhere('p.PolizaID = :polizaID', { polizaID: params.polizaID });
+    }
+
+    qb.orderBy('p.FechaMovimiento', 'DESC');
+
+    return qb.getMany();
   }
 }

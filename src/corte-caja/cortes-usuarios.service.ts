@@ -41,7 +41,7 @@ export class CortesUsuariosService {
 
     @InjectRepository(Poliza, 'db1')
     private readonly polizaRepository: Repository<Poliza>,
-  ) {}
+  ) { }
 
   async getAllCortes(): Promise<CortesUsuarios[]> {
     return this.cortesUsuariosRepository.find({
@@ -471,19 +471,44 @@ export class CortesUsuariosService {
 
     console.log(inicioCaja);
 
+    // 🕒 Rango de fechas: último corte → hoy
     const fechaInicio = ultimoCorte
       ? new Date(ultimoCorte.FechaCorte)
-      : new Date(inicioCaja.FechaInicio); // respaldo si no hay corte anterior
+      : new Date(inicioCaja.FechaInicio);
 
-    fechaInicio.setHours(0, 0, 0, 0); // aseguramos el inicio del día}
+    fechaInicio.setHours(0, 0, 0, 0);
 
-    console.log(fechaInicio);
+    const fechaFin = new Date();
+    fechaFin.setHours(23, 59, 59, 999);
 
-    const fechaFin = new Date(); // ahora
-    fechaFin.setHours(23, 59, 59, 999); // final del día actual
-    // **OBTENER TRANSACCIONES DEL USUARIO FILTRADAS POR FECHA**
+    // ✅ Corregir desfase de zona horaria (evita el problema de UTC)
+    fechaInicio.setTime(fechaInicio.getTime() - fechaInicio.getTimezoneOffset() * 60000);
+    fechaFin.setTime(fechaFin.getTime() - fechaFin.getTimezoneOffset() * 60000);
 
-    console.log(fechaFin);
+    console.log('🕒 Rango local corregido:', fechaInicio, fechaFin);
+
+
+    // ✅ VALIDACIÓN: no permitir corte si hay transacciones no efectivas y no validadas
+    // ✅ VALIDACIÓN: buscar transacciones no en efectivo y no validadas
+    const transaccionesNoValidadas = await this.transaccionesRepository.find({
+      where: {
+        UsuarioCreo: { UsuarioID: usuarioID },
+        FechaTransaccion: Between(fechaInicio, fechaFin),
+        FormaPago: In(['Transferencia', 'Deposito', 'Tarjeta']),
+        Validado: false, // 👈 usa boolean porque tu entidad lo maneja así
+      },
+    });
+
+    console.log('🔍 Transacciones no validadas encontradas:', transaccionesNoValidadas);
+
+    if (transaccionesNoValidadas.length > 0) {
+      throw new HttpException(
+        `No se puede generar el corte: hay ${transaccionesNoValidadas.length} transacción(es) no validadas con forma de pago distinta a efectivo.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+
     const ingresos =
       (await this.transaccionesRepository.find({
         where: {
@@ -655,9 +680,9 @@ export class CortesUsuariosService {
           FechaPago: p.FechaPago,
           Poliza: poliza
             ? {
-                PolizaID: poliza.PolizaID,
-                NumeroPoliza: poliza.NumeroPoliza,
-              }
+              PolizaID: poliza.PolizaID,
+              NumeroPoliza: poliza.NumeroPoliza,
+            }
             : null,
         };
       }),
@@ -834,9 +859,9 @@ export class CortesUsuariosService {
           FechaPago: p.FechaPago,
           Poliza: poliza
             ? {
-                PolizaID: poliza.PolizaID,
-                NumeroPoliza: poliza.NumeroPoliza,
-              }
+              PolizaID: poliza.PolizaID,
+              NumeroPoliza: poliza.NumeroPoliza,
+            }
             : null,
         };
       }),

@@ -29,7 +29,7 @@ export class TransaccionesService {
 
     private readonly bitacoraEliminacionesService: BitacoraEliminacionesService,
     private readonly bitacoraEdicionesService: BitacoraEdicionesService,
-  ) {}
+  ) { }
 
   // ✅ Servicio: transacciones.service.ts
   async generarCodigoAutorizacion(
@@ -216,6 +216,32 @@ export class TransaccionesService {
       );
     }
 
+    // 🧩 Extraer valores
+    const { Validado, UsuarioValidoID } = updateDto as any;
+
+    // 🔄 Convertir Validado a booleano para la comparación lógica
+    const validadoBool = Validado === 1 || Validado === true;
+
+    // 🔒 Validaciones cruzadas
+    if (Validado !== undefined) {
+      // Si se quiere marcar como validado (1 o true), debe existir usuario validador
+      if (validadoBool && !UsuarioValidoID) {
+        throw new HttpException(
+          'Debe especificarse el UsuarioValidoID cuando se valida una transacción.',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      // Si se envía UsuarioValidoID pero Validado no es 1
+      if (UsuarioValidoID && !validadoBool) {
+        throw new HttpException(
+          'Si se indica un UsuarioValidoID, el campo Validado debe ser 1 (true).',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    }
+
+    // 🧾 Registrar cambios
     const camposModificados = {};
     for (const [key, value] of Object.entries(updateDto)) {
       if (transaccion[key] !== value) {
@@ -228,7 +254,7 @@ export class TransaccionesService {
     const updatedTransaccion =
       await this.transaccionesRepository.save(transaccion);
 
-    // ✅ Registrar en la bitácora de ediciones
+    // 🕵️‍♀️ Bitácora de ediciones
     if (Object.keys(camposModificados).length > 0) {
       await this.bitacoraEdicionesService.registrarEdicion(
         'Transacciones',
@@ -240,6 +266,7 @@ export class TransaccionesService {
 
     return updatedTransaccion;
   }
+
 
   // ✅ Método para eliminar una transacción con validación de código
   // ✅ Método para eliminar una transacción con validación de código
@@ -278,5 +305,44 @@ export class TransaccionesService {
     );
 
     return `Transacción con ID ${id} eliminada exitosamente.`;
+  }
+
+  // ✅ pon el tipo inline en baseQuery y en los métodos públicos:
+  private baseQuery(
+    validado: boolean,
+    filtros: { fechaInicio?: string; fechaFin?: string; usuarioID?: number } = {},
+  ) {
+    const qb = this.transaccionesRepository
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.InicioCaja', 'inicio')
+      .leftJoinAndSelect('t.UsuarioCreo', 'creo')
+      .leftJoinAndSelect('t.UsuarioValido', 'valido')
+      .leftJoinAndSelect('t.CuentaBancaria', 'cuenta')
+      .where('t.FormaPago != :efectivo', { efectivo: 'Efectivo' })
+      .andWhere('t.Validado = :validado', { validado });
+
+    if (filtros.fechaInicio) {
+      qb.andWhere('t.FechaTransaccion >= :fi', { fi: `${filtros.fechaInicio} 00:00:00` });
+    }
+    if (filtros.fechaFin) {
+      qb.andWhere('t.FechaTransaccion <= :ff', { ff: `${filtros.fechaFin} 23:59:59` });
+    }
+    if (filtros.usuarioID) {
+      qb.andWhere('creo.UsuarioID = :usuarioID', { usuarioID: filtros.usuarioID });
+    }
+
+    return qb.orderBy('t.FechaTransaccion', 'DESC');
+  }
+
+  async listarMovimientosPendientes(
+    filtros: { fechaInicio?: string; fechaFin?: string; usuarioID?: number } = {},
+  ) {
+    return this.baseQuery(false, filtros).getMany();
+  }
+
+  async listarMovimientosValidados(
+    filtros: { fechaInicio?: string; fechaFin?: string; usuarioID?: number } = {},
+  ) {
+    return this.baseQuery(true, filtros).getMany();
   }
 }

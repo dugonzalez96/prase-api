@@ -8,6 +8,7 @@ import {
   Param,
   HttpException,
   HttpStatus,
+  Query,
 } from '@nestjs/common';
 import { CreateTransaccionDto } from './dto/create-transaccion.dto';
 import { UpdateTransaccionDto } from './dto/update-transaccion.dto';
@@ -16,7 +17,7 @@ import { Transacciones } from './entities/transacciones.entity';
 
 @Controller('transacciones')
 export class TransaccionesController {
-  constructor(private readonly transaccionesService: TransaccionesService) {}
+  constructor(private readonly transaccionesService: TransaccionesService) { }
 
   @Post()
   create(@Body() createTransaccionDto: CreateTransaccionDto) {
@@ -62,5 +63,35 @@ export class TransaccionesController {
   ): Promise<string> {
     const { codigo, motivo } = dto;
     return this.transaccionesService.remove(id, usuario, motivo, codigo);
+  }
+
+  // Ejemplo de uso:
+  // GET /transacciones/movimientos/pendientes?fechaInicio=2025-10-01&fechaFin=2025-10-31&usuarioID=12
+  @Get('movimientos/pendientes')
+  async listarPendientes(
+    @Query('fechaInicio') fechaInicio?: string,
+    @Query('fechaFin') fechaFin?: string,
+    @Query('usuarioID') usuarioID?: string,
+  ): Promise<Transacciones[]> {
+    return this.transaccionesService.listarMovimientosPendientes({
+      fechaInicio,
+      fechaFin,
+      usuarioID: usuarioID ? Number(usuarioID) : undefined,
+    });
+    // Nota: estas son solo consultas; la bitácora de ediciones sigue registrándose en PATCH /update.
+  }
+
+  // GET /transacciones/movimientos/validados?fechaInicio=2025-10-01&fechaFin=2025-10-31&usuarioID=12
+  @Get('movimientos/validados')
+  async listarValidados(
+    @Query('fechaInicio') fechaInicio?: string,
+    @Query('fechaFin') fechaFin?: string,
+    @Query('usuarioID') usuarioID?: string,
+  ): Promise<Transacciones[]> {
+    return this.transaccionesService.listarMovimientosValidados({
+      fechaInicio,
+      fechaFin,
+      usuarioID: usuarioID ? Number(usuarioID) : undefined,
+    });
   }
 }
