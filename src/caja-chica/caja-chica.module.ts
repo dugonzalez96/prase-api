@@ -12,6 +12,7 @@ import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-elimi
 import { CortesUsuarios } from 'src/corte-caja/entities/cortes-usuarios.entity';
 import { CortesUsuariosService } from 'src/corte-caja/cortes-usuarios.service';
 import { CajaChicaService } from './caja-chica.service';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { CajaChicaService } from './caja-chica.service';
         Poliza,
         BitacoraEdiciones,
         BitacoraEliminaciones,
+        Sucursal
       ],
       'db1',
     ),

@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { IniciosCaja } from 'src/inicios-caja/entities/inicios-caja.entity';
 import { usuarios } from 'src/users/users.entity';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 @Entity('CortesUsuarios')
 export class CortesUsuarios {
@@ -18,6 +19,10 @@ export class CortesUsuarios {
   @ManyToOne(() => IniciosCaja, { nullable: true })
   @JoinColumn({ name: 'InicioCajaID' })
   InicioCaja: IniciosCaja;
+
+  @ManyToOne(() => Sucursal, { nullable: false })
+  @JoinColumn({ name: 'SucursalID' })
+  Sucursal: Sucursal;
 
   @ManyToOne(() => usuarios, { nullable: true })
   @JoinColumn({ name: 'usuarioID' })

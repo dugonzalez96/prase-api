@@ -10,9 +10,10 @@ import { BitacoraEdiciones } from 'src/bitacora-ediciones/bitacora-ediciones.ent
 import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.entity';
 import { usuarios } from 'src/users/users.entity';
 import { Poliza } from 'src/polizas/entities/poliza.entity';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([CortesUsuarios,Transacciones,IniciosCaja,PagosPoliza,BitacoraEdiciones,BitacoraEliminaciones,usuarios,Poliza], 'db1')],
+  imports: [TypeOrmModule.forFeature([CortesUsuarios,Transacciones,IniciosCaja,PagosPoliza,BitacoraEdiciones,BitacoraEliminaciones,usuarios,Poliza,Sucursal], 'db1')],
   controllers: [CortesUsuariosController],
   providers: [CortesUsuariosService],
 })

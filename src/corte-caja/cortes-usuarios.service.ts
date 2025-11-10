@@ -14,6 +14,7 @@ import { BitacoraEdiciones } from 'src/bitacora-ediciones/bitacora-ediciones.ent
 import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.entity';
 import { usuarios } from 'src/users/users.entity';
 import { Poliza } from 'src/polizas/entities/poliza.entity';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 @Injectable()
 export class CortesUsuariosService {
@@ -39,8 +40,13 @@ export class CortesUsuariosService {
     @InjectRepository(usuarios, 'db1')
     private readonly usersRepository: Repository<usuarios>,
 
+    @InjectRepository(Sucursal, 'db1')
+    private readonly sucursalRepository: Repository<Sucursal>,
+
     @InjectRepository(Poliza, 'db1')
-    private readonly polizaRepository: Repository<Poliza>,
+    private readonly polizaRepository: Repository<Poliza>
+
+
   ) { }
 
   async getAllCortes(): Promise<CortesUsuarios[]> {
@@ -1013,6 +1019,18 @@ export class CortesUsuariosService {
     if (!usuario) {
       throw new HttpException('El usuario no existe.', HttpStatus.BAD_REQUEST);
     }
+
+    const sucursal = await this.sucursalRepository.findOne({
+      where: { SucursalID: usuario.SucursalID },
+    });
+
+    if (!sucursal) {
+      throw new HttpException(
+        'El usuario no tiene una sucursal asignada.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
 
     // **Guardar el corte en la base de datos**
     const nuevoCorte = this.cortesUsuariosRepository.create({
