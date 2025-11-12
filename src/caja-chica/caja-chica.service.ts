@@ -10,6 +10,7 @@ import { CortesUsuarios } from 'src/corte-caja/entities/cortes-usuarios.entity';
 import { BitacoraEdiciones } from 'src/bitacora-ediciones/bitacora-ediciones.entity';
 import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.entity';
 import { IniciosCaja } from 'src/inicios-caja/entities/inicios-caja.entity';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 type EstatusCajaChica = 'Pendiente' | 'Cerrado' | 'Cancelado';
 
@@ -32,6 +33,9 @@ export class CajaChicaService {
 
         @InjectRepository(BitacoraEdiciones, 'db1')
         private readonly bitacoraEdicionesRepository: Repository<BitacoraEdiciones>,
+
+        @InjectRepository(Sucursal, 'db1')
+        private readonly sucursalRepository: Repository<Sucursal>,
 
         @InjectRepository(BitacoraEliminaciones, 'db1')
         private readonly bitacoraEliminacionesRepository: Repository<BitacoraEliminaciones>,
@@ -233,8 +237,6 @@ export class CajaChicaService {
         };
     }
 
-
-
     // ============================================================
     // 🔹 POST /caja-chica/cuadrar
     //  - Valida que no existan cortes de usuario PENDIENTE hoy
@@ -242,6 +244,7 @@ export class CajaChicaService {
     //  - Calcula SaldoEsperado y guarda capturados + Folio + Cierre
     // ============================================================
     async cuadrarCajaChica(usuarioID: number, dto: CreateCajaChicaDto) {
+        // ventana desde último cuadre
         const { desde, finDia } = await this.ventanaDesdeUltimoCuadre();
 
         // (A) BLOQUEO por cortes PENDIENTES en la ventana
@@ -266,9 +269,9 @@ export class CajaChicaService {
         }
 
         // (C) BLOQUEO si ya existiera cuadre (Cerrado|Pendiente) HOY
-        const { hoy } = this.rangoDiaActual();
+        const { hoy, finDia: _fin } = this.rangoDiaActual(); // obtén hoy
         const cuadreExistente = await this.cajaChicaRepository.findOne({
-            where: { Fecha: Between(hoy, finDia), Estatus: In(['Cerrado', 'Pendiente']) },
+            where: { Fecha: Between(hoy, _fin), Estatus: In(['Cerrado', 'Pendiente']) },
         });
         if (cuadreExistente) {
             throw new HttpException(
@@ -311,9 +314,20 @@ export class CajaChicaService {
 
         const Diferencia = Number(SaldoReal) - Number(SaldoEsperado);
 
-        const usuario = await this.usuariosRepository.findOne({ where: { UsuarioID: usuarioID } });
+        // Determinar Usuario: prioriza dto.UsuarioID si viene (uso sin auth)
+        const idUsuarioFinal = usuarioID ?? usuarioID;
+        const usuario = await this.usuariosRepository.findOne({ where: { UsuarioID: idUsuarioFinal } });
         if (!usuario) throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
 
+        // Determinar Sucursal: prioriza dto.SucursalID, si no existe, usa la del usuario
+        const sucursalIdFinal = dto.SucursalID ?? (usuario?.SucursalID ?? null);
+        if (!sucursalIdFinal) {
+            throw new HttpException('SucursalID no proporcionada y usuario no tiene sucursal asignada', HttpStatus.BAD_REQUEST);
+        }
+        const sucursal = await this.sucursalRepository.findOne({ where: { SucursalID: sucursalIdFinal } });
+        if (!sucursal) throw new HttpException('Sucursal no encontrada', HttpStatus.NOT_FOUND);
+
+        // Crear entidad (asegura que pasas objetos correctos para relación)
         const nuevo = this.cajaChicaRepository.create({
             Fecha: hoy,
             FechaCierre: new Date(),
@@ -332,12 +346,15 @@ export class CajaChicaService {
             Diferencia,
             Observaciones: dto.Observaciones ?? null,
             UsuarioCuadre: usuario,
-            FolioCierre: `CC-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(Math.random() * 999).toString().padStart(3, '0')}`,
+            Sucursal: sucursal, // asigna la entidad Sucursal
+            FolioCierre: dto.FolioCierre ?? `CC-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(Math.random() * 999).toString().padStart(3, '0')}`,
             Estatus: 'Cerrado',
-        });
+        } as Partial<CajaChica>); // casteo ligero para evitar conflicto con DeepPartial
 
-        const guardado = await this.cajaChicaRepository.save(nuevo);
+        // Guarda (save) — aquí retornará una sola entidad
+        const guardado = await this.cajaChicaRepository.save(nuevo as CajaChica);
 
+        // Bitácora (igual que antes). guardado.CajaChicaID ya existe y es number
         await this.bitacoraEdicionesRepository.save(
             this.bitacoraEdicionesRepository.create({
                 Entidad: 'CajaChica',
@@ -359,6 +376,8 @@ export class CajaChicaService {
             cuadre: guardado,
         };
     }
+
+
 
 
     // ============================================================

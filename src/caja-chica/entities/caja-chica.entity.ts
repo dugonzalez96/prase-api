@@ -9,6 +9,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { usuarios } from 'src/users/users.entity';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 export type EstatusCajaChica = 'Pendiente' | 'Cerrado' | 'Cancelado';
 
@@ -73,6 +74,10 @@ export class CajaChica {
   @ManyToOne(() => usuarios, { nullable: true })
   @JoinColumn({ name: 'UsuarioCuadreID' })
   UsuarioCuadre: usuarios | null;
+
+  @ManyToOne(() => Sucursal, { nullable: false })
+  @JoinColumn({ name: 'SucursalID' })
+  Sucursal: Sucursal;
 
   @Column({
     type: 'enum',

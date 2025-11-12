@@ -1,4 +1,3 @@
-// src/caja-chica/dto/create-caja-chica.dto.ts
 export class CreateCajaChicaDto {
   // Capturables
   SaldoReal: number;
@@ -9,4 +8,8 @@ export class CreateCajaChicaDto {
   // Opcional
   Observaciones?: string | null;
   FolioCierre?: string | null;
+
+  // Nueva opción: indicar explícitamente la sucursal si se desea
+  SucursalID?: number | null;
+
 }
