@@ -8,11 +8,14 @@ import { usuarios } from 'src/users/users.entity';
 import { CuentasBancarias } from 'src/cuentas-bancarias/entities/cuentas-bancarias.entity';
 import { BitacoraEdicionesModule } from 'src/bitacora-ediciones/bitacora-ediciones.module';
 import { BitacoraEliminacionesModule } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.module';
+import { BitacoraEdiciones } from 'src/bitacora-ediciones/bitacora-ediciones.entity';
+import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.entity';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature(
-      [Transacciones, IniciosCaja, usuarios, CuentasBancarias],
+      [Transacciones, IniciosCaja, usuarios, CuentasBancarias,BitacoraEdiciones, BitacoraEliminaciones,Sucursal],
       'db1',
     ),
     forwardRef(() => BitacoraEdicionesModule),

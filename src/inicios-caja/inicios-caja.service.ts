@@ -8,6 +8,7 @@ import { usuarios } from 'src/users/users.entity';
 import { BitacoraEdiciones } from 'src/bitacora-ediciones/bitacora-ediciones.entity';
 import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.entity';
 import { Transacciones } from 'src/transacciones/entities/transacciones.entity';
+import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 @Injectable()
 export class IniciosCajaService {
@@ -22,6 +23,9 @@ export class IniciosCajaService {
 
     @InjectRepository(Transacciones, 'db1')
     private readonly transaccionesRepository: Repository<Transacciones>,
+
+    @InjectRepository(Sucursal, 'db1')
+    private readonly sucursalesRepository: Repository<Sucursal>,
 
     @InjectRepository(BitacoraEdiciones, 'db1')
     private readonly bitacoraEdicionesRepository: Repository<BitacoraEdiciones>,
@@ -50,110 +54,133 @@ export class IniciosCajaService {
     return inicioCaja;
   }
 
-  async create(createDto: CreateInicioCajaDto): Promise<IniciosCaja> {
-    const {
-      UsuarioID,
-      UsuarioAutorizoID,
-      MontoInicial,
-      FirmaElectronica,
-      TotalEfectivo,
-      TotalTransferencia,
-    } = createDto;
+ async create(createDto: CreateInicioCajaDto): Promise<IniciosCaja> {
+  const {
+    UsuarioID,
+    UsuarioAutorizoID,
+    MontoInicial,
+    FirmaElectronica,
+    TotalEfectivo,
+    TotalTransferencia,
+  } = createDto;
 
-    const inicioActivo = await this.iniciosCajaRepository.findOne({
-      where: { Estatus: 'Activo', Usuario: { UsuarioID } },
-    });
+  // Verificar si el usuario ya tiene un inicio de caja activo
+  const inicioActivo = await this.iniciosCajaRepository.findOne({
+    where: { Estatus: 'Activo', Usuario: { UsuarioID } },
+    relations: ['Usuario', 'Sucursal'],
+  });
 
-    if (inicioActivo) {
-      throw new HttpException(
-        'El usuario ya tiene un inicio de caja activo',
-        HttpStatus.CONFLICT,
-      );
-    }
-
-    // Validar que todos los campos requeridos estén presentes
-    if (!UsuarioID) {
-      throw new HttpException(
-        'El UsuarioID es obligatorio',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
-    if (!UsuarioAutorizoID) {
-      throw new HttpException(
-        'El UsuarioAutorizoID es obligatorio',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
-    // Validar si el UsuarioID existe
-    const usuario = await this.usuariosRepository.findOne({
-      where: { UsuarioID: UsuarioID },
-    });
-    if (!usuario) {
-      throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
-    }
-
-    // Validar si el UsuarioAutorizoID existe
-    const usuarioAutorizo = await this.usuariosRepository.findOne({
-      where: { UsuarioID: UsuarioAutorizoID },
-    });
-    if (!usuarioAutorizo) {
-      throw new HttpException(
-        'Usuario autorizador no encontrado',
-        HttpStatus.NOT_FOUND,
-      );
-    }
-
-    // Validar firma electrónica (Base64)
-    /* if (!FirmaElectronica) {
-       throw new HttpException(
-         'La FirmaElectronica es obligatoria',
-         HttpStatus.BAD_REQUEST,
-       );
-     }*/
-
-    // if (!this.isValidBase64(FirmaElectronica)) {
-    //   throw new HttpException(
-    //     'La FirmaElectronica no es válida',
-    //     HttpStatus.BAD_REQUEST,
-    //   );
-    // }
-
-    // if (!this.isValidBase64Size(FirmaElectronica)) {
-    //   throw new HttpException(
-    //     `La FirmaElectronica excede el tamaño máximo permitido de ${
-    //       this.MAX_FILE_SIZE_BYTES / 1024
-    //     } KB`,
-    //     HttpStatus.BAD_REQUEST,
-    //   );
-    // }
-
-    // Crear el nuevo inicio de caja
-    const nuevoInicioCaja = this.iniciosCajaRepository.create({
-      Usuario: usuario,
-      UsuarioAutorizo: usuarioAutorizo,
-      MontoInicial,
-      TotalEfectivo,
-      TotalTransferencia,
-      FirmaElectronica,
-      Estatus: 'Activo', // Valor por defecto definido en el entity
-    });
-
-    const savedInicioCaja =
-      await this.iniciosCajaRepository.save(nuevoInicioCaja);
-
-    // Registro en la bitácora de ediciones
-    const bitacora = this.bitacoraEdicionesRepository.create({
-      Entidad: 'IniciosCaja',
-      EntidadID: savedInicioCaja.InicioCajaID,
-      CamposModificados: createDto,
-      UsuarioEdicion: usuario.NombreUsuario,
-    });
-    await this.bitacoraEdicionesRepository.save(bitacora);
-
-    return savedInicioCaja;
+  if (inicioActivo) {
+    throw new HttpException(
+      'El usuario ya tiene un inicio de caja activo',
+      HttpStatus.CONFLICT,
+    );
   }
+
+  // Validar que todos los campos requeridos estén presentes
+  if (!UsuarioID) {
+    throw new HttpException(
+      'El UsuarioID es obligatorio',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  if (!UsuarioAutorizoID) {
+    throw new HttpException(
+      'El UsuarioAutorizoID es obligatorio',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  // Validar si el UsuarioID existe
+  const usuario = await this.usuariosRepository.findOne({
+    where: { UsuarioID: UsuarioID },
+  });
+  if (!usuario) {
+    throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
+  }
+
+  // Validar si el UsuarioAutorizoID existe
+  const usuarioAutorizo = await this.usuariosRepository.findOne({
+    where: { UsuarioID: UsuarioAutorizoID },
+  });
+  if (!usuarioAutorizo) {
+    throw new HttpException(
+      'Usuario autorizador no encontrado',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+
+  // ➕ NUEVO: validar que el usuario tenga sucursal y obtenerla
+  if (!usuario.SucursalID) {
+    throw new HttpException(
+      'El usuario no tiene una sucursal asignada',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  const sucursal = await this.sucursalesRepository.findOne({
+    where: { SucursalID: usuario.SucursalID },
+  });
+
+  if (!sucursal) {
+    throw new HttpException(
+      'No se encontró la sucursal asociada al usuario',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+
+  // Validar firma electrónica (Base64)
+  /* if (!FirmaElectronica) {
+     throw new HttpException(
+       'La FirmaElectronica es obligatoria',
+       HttpStatus.BAD_REQUEST,
+     );
+   }*/
+
+  // if (!this.isValidBase64(FirmaElectronica)) {
+  //   throw new HttpException(
+  //     'La FirmaElectronica no es válida',
+  //     HttpStatus.BAD_REQUEST,
+  //   );
+  // }
+
+  // if (!this.isValidBase64Size(FirmaElectronica)) {
+  //   throw new HttpException(
+  //     `La FirmaElectronica excede el tamaño máximo permitido de ${
+  //       this.MAX_FILE_SIZE_BYTES / 1024
+  //     } KB`,
+  //     HttpStatus.BAD_REQUEST,
+  //   );
+  // }
+
+  // Crear el nuevo inicio de caja
+  const nuevoInicioCaja = this.iniciosCajaRepository.create({
+    Usuario: usuario,
+    UsuarioAutorizo: usuarioAutorizo,
+    Sucursal: sucursal,        // 👈 NUEVO: se asigna la sucursal automáticamente
+    MontoInicial,
+    TotalEfectivo,
+    TotalTransferencia,
+    FirmaElectronica,
+    Estatus: 'Activo', // Valor por defecto definido en el entity
+  });
+
+  const savedInicioCaja =
+    await this.iniciosCajaRepository.save(nuevoInicioCaja);
+
+  // Registro en la bitácora de ediciones
+  const bitacora = this.bitacoraEdicionesRepository.create({
+    Entidad: 'IniciosCaja',
+    EntidadID: savedInicioCaja.InicioCajaID,
+    CamposModificados: createDto,
+    UsuarioEdicion: usuario.NombreUsuario,
+  });
+  await this.bitacoraEdicionesRepository.save(bitacora);
+
+  return savedInicioCaja;
+}
+
 
   async update(
     id: number,

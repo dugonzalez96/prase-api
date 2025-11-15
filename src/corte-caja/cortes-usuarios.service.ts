@@ -172,37 +172,115 @@ export class CortesUsuariosService {
   /**
    * 🔍 Obtener usuarios que aún NO tienen corte registrado el día actual
    */
-  async getUsuariosSinCorteHoy(): Promise<any[]> {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const finDia = new Date();
-    finDia.setHours(23, 59, 59, 999);
+  /**
+   * 🔍 Obtener usuarios que necesitan hacer corte de caja
+   * 
+   * Lógica:
+   * - Usuarios CON cortes previos: si tienen movimientos desde su último corte hasta hoy
+   * - Usuarios SIN cortes previos: si tienen movimientos HOY
+   */
+async getUsuariosSinCorteHoy(): Promise<any[]> {
+  // 🌍 Trabajar en UTC como lo hace generarCorteCaja
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  const finDia = new Date();
+  finDia.setHours(23, 59, 59, 999);
 
-    // 1. Traer todos los usuarios
-    const usuarios = await this.usersRepository.find();
+  console.log('🕒 Rango en hora local:', hoy, finDia);
+  console.log('🕒 Rango en UTC:', hoy.toISOString(), finDia.toISOString());
 
-    // 2. Traer todos los cortes del día con relación a los usuarios
-    const cortesDelDia = await this.cortesUsuariosRepository.find({
+  // 1️⃣ Traer todos los usuarios activos
+  const usuarios = await this.usersRepository.find();
+
+  // 2️⃣ Traer cortes del día
+  const cortesDelDia = await this.cortesUsuariosRepository.find({
+    where: {
+      FechaCorte: Between(hoy, finDia),
+      Estatus: Not('Cancelado'),
+    },
+    relations: ['usuarioID'],
+  });
+
+  // 3️⃣ Set de usuarios con corte hoy
+  const usuariosConCorteHoy = new Set(
+    cortesDelDia.map((corte) => corte.usuarioID.UsuarioID),
+  );
+
+  // 4️⃣ Filtrar usuarios sin corte hoy
+  const usuariosSinCorteHoy = usuarios.filter(
+    (u) => !usuariosConCorteHoy.has(u.UsuarioID),
+  );
+
+  const usuariosCandidatos = [];
+
+  for (const usuario of usuariosSinCorteHoy) {
+    // 📅 Buscar último corte
+    const ultimoCorte = await this.cortesUsuariosRepository.findOne({
       where: {
-        FechaCorte: Between(hoy, finDia),
-        Estatus: Not('Cancelado'), // Opcional: excluir cancelados
+        usuarioID: { UsuarioID: usuario.UsuarioID },
+        Estatus: Not('Cancelado'),
       },
-      relations: ['usuarioID'],
+      order: { FechaCorte: 'DESC' },
     });
 
-    // 3. Crear un Set con los IDs de usuarios que ya tienen corte hoy
-    const usuariosConCorteHoy = new Set(
-      cortesDelDia.map((corte) => corte.usuarioID.UsuarioID),
-    );
+    let fechaDesde: Date;
 
-    // 4. Filtrar los usuarios que NO estén en el Set
-    const usuariosSinCorte = usuarios.filter(
-      (u) => !usuariosConCorteHoy.has(u.UsuarioID),
-    );
+    if (ultimoCorte) {
+      // 🔹 Usuario CON cortes: desde día del último corte
+      fechaDesde = new Date(ultimoCorte.FechaCorte);
+      // ⚠️ NO resetear a 00:00:00 porque queremos desde DESPUÉS del corte
+      // Si el corte fue a las 10 PM, queremos transacciones desde las 10 PM en adelante
+      // PERO si queremos considerar todo el día siguiente, entonces sí:
+      fechaDesde.setHours(0, 0, 0, 0);
+    } else {
+      // 🔹 Usuario SIN cortes: solo movimientos de HOY
+      fechaDesde = new Date(hoy);
+    }
 
-    return usuariosSinCorte;
+    const fechaHasta = new Date(finDia);
+
+    console.log(`🔍 Usuario: ${usuario.NombreUsuario}`);
+    console.log(`   📅 Último corte: ${ultimoCorte?.FechaCorte || 'NUNCA'}`);
+    console.log(`   🕒 Buscando desde: ${fechaDesde.toISOString()}`);
+    console.log(`   🕒 Buscando hasta: ${fechaHasta.toISOString()}`);
+
+    // 🔍 Buscar transacciones
+    const transacciones = await this.transaccionesRepository.count({
+      where: {
+        UsuarioCreo: { UsuarioID: usuario.UsuarioID },
+        FechaTransaccion: Between(fechaDesde, fechaHasta),
+      },
+    });
+
+    // 🔍 Buscar pagos de póliza
+    const pagosPoliza = await this.pagosPolizaRepository.count({
+      where: {
+        Usuario: { UsuarioID: usuario.UsuarioID },
+        FechaPago: Between(fechaDesde, fechaHasta),
+        MotivoCancelacion: IsNull(),
+      },
+    });
+
+    console.log(`   📊 Resultado: ${transacciones} transacciones, ${pagosPoliza} pagos`);
+
+    // ✅ Si tiene movimientos, es candidato
+    if (transacciones > 0 || pagosPoliza > 0) {
+      usuariosCandidatos.push({
+        UsuarioID: usuario.UsuarioID,
+        Nombre: usuario.NombreUsuario,
+        ultimoCorte: ultimoCorte?.FechaCorte || null,
+        diasSinCorte: ultimoCorte 
+          ? Math.floor((new Date().getTime() - new Date(ultimoCorte.FechaCorte).getTime()) / (1000 * 60 * 60 * 24))
+          : 0,
+        movimientosPendientes: transacciones + pagosPoliza,
+        transacciones,
+        pagosPoliza,
+      });
+    }
   }
 
+  return usuariosCandidatos;
+}
   /**
    * 🔹 Actualizar un corte de caja
    */

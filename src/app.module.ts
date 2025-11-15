@@ -87,6 +87,8 @@ import { CortesUsuarios } from './corte-caja/entities/cortes-usuarios.entity';
 import { CortesUsuariosModule } from './corte-caja/cortes-usuarios.module';
 import { CajaChica } from './caja-chica/entities/caja-chica.entity';
 import { CajaChicaModule } from './caja-chica/caja-chica.module';
+import { CajaGeneral } from './caja-general/entities/caja-general.entity';
+import { CajaGeneralModule } from './caja-general/caja-general.module';
 
 @Module({
   imports: [
@@ -98,7 +100,7 @@ import { CajaChicaModule } from './caja-chica/caja-chica.module';
       username: 'root',
       password: 'efCrJOQYzgfqpsAYJyEZMjzIvnPlITin',
       database: 'prase-db',
-      entities: [usuarios, grupos, aplicaciones, grupos_has_usuarios, PaqueteCoberturas, BitacoraEliminaciones, BitacoraEdiciones, Coberturas, PaqueteCobertura_Cobertura, Deducibles, Cobertura_Deducible, TiposSumaAsegurada, ConfiguracionesSistema, ReglasNegocio, CondicionesReglas, AplicacionReglas, AjustePorCodigoPostal, Clientes, Vehiculos, ApplicationsGrupos, Cotizacion, DetallesCotizacionPoliza, TiposDeducible, TiposMoneda, UsosVehiculo,TiposVehiculo, TipoPago,Poliza,PolizaHistorial,TipoEmpleado,Empleado,MetodosPago,EstatusPago,PagosPoliza,DocumentosRequeridos,DocumentosDigitalizados, CuentasBancarias, Sucursal, IniciosCaja,Transacciones,CortesUsuarios, CajaChica],
+      entities: [usuarios, grupos, aplicaciones, grupos_has_usuarios, PaqueteCoberturas, BitacoraEliminaciones, BitacoraEdiciones, Coberturas, PaqueteCobertura_Cobertura, Deducibles, Cobertura_Deducible, TiposSumaAsegurada, ConfiguracionesSistema, ReglasNegocio, CondicionesReglas, AplicacionReglas, AjustePorCodigoPostal, Clientes, Vehiculos, ApplicationsGrupos, Cotizacion, DetallesCotizacionPoliza, TiposDeducible, TiposMoneda, UsosVehiculo,TiposVehiculo, TipoPago,Poliza,PolizaHistorial,TipoEmpleado,Empleado,MetodosPago,EstatusPago,PagosPoliza,DocumentosRequeridos,DocumentosDigitalizados, CuentasBancarias, Sucursal, IniciosCaja,Transacciones,CortesUsuarios, CajaChica, CajaGeneral],
       synchronize: false,
       cache: false,
       //logger: 'simple-console',
@@ -145,7 +147,8 @@ import { CajaChicaModule } from './caja-chica/caja-chica.module';
     IniciosCajaModule,
     TransaccionesModule,
     CortesUsuariosModule,
-    CajaChicaModule
+    CajaChicaModule,
+    CajaGeneralModule
     
   ],
   controllers: [AppController],
