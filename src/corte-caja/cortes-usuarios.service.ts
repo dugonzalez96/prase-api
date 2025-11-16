@@ -179,108 +179,108 @@ export class CortesUsuariosService {
    * - Usuarios CON cortes previos: si tienen movimientos desde su último corte hasta hoy
    * - Usuarios SIN cortes previos: si tienen movimientos HOY
    */
-async getUsuariosSinCorteHoy(): Promise<any[]> {
-  // 🌍 Trabajar en UTC como lo hace generarCorteCaja
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  const finDia = new Date();
-  finDia.setHours(23, 59, 59, 999);
+  async getUsuariosSinCorteHoy(): Promise<any[]> {
+    // 🌍 Trabajar en UTC como lo hace generarCorteCaja
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const finDia = new Date();
+    finDia.setHours(23, 59, 59, 999);
 
-  console.log('🕒 Rango en hora local:', hoy, finDia);
-  console.log('🕒 Rango en UTC:', hoy.toISOString(), finDia.toISOString());
+    console.log('🕒 Rango en hora local:', hoy, finDia);
+    console.log('🕒 Rango en UTC:', hoy.toISOString(), finDia.toISOString());
 
-  // 1️⃣ Traer todos los usuarios activos
-  const usuarios = await this.usersRepository.find();
+    // 1️⃣ Traer todos los usuarios activos
+    const usuarios = await this.usersRepository.find();
 
-  // 2️⃣ Traer cortes del día
-  const cortesDelDia = await this.cortesUsuariosRepository.find({
-    where: {
-      FechaCorte: Between(hoy, finDia),
-      Estatus: Not('Cancelado'),
-    },
-    relations: ['usuarioID'],
-  });
-
-  // 3️⃣ Set de usuarios con corte hoy
-  const usuariosConCorteHoy = new Set(
-    cortesDelDia.map((corte) => corte.usuarioID.UsuarioID),
-  );
-
-  // 4️⃣ Filtrar usuarios sin corte hoy
-  const usuariosSinCorteHoy = usuarios.filter(
-    (u) => !usuariosConCorteHoy.has(u.UsuarioID),
-  );
-
-  const usuariosCandidatos = [];
-
-  for (const usuario of usuariosSinCorteHoy) {
-    // 📅 Buscar último corte
-    const ultimoCorte = await this.cortesUsuariosRepository.findOne({
+    // 2️⃣ Traer cortes del día
+    const cortesDelDia = await this.cortesUsuariosRepository.find({
       where: {
-        usuarioID: { UsuarioID: usuario.UsuarioID },
+        FechaCorte: Between(hoy, finDia),
         Estatus: Not('Cancelado'),
       },
-      order: { FechaCorte: 'DESC' },
+      relations: ['usuarioID'],
     });
 
-    let fechaDesde: Date;
+    // 3️⃣ Set de usuarios con corte hoy
+    const usuariosConCorteHoy = new Set(
+      cortesDelDia.map((corte) => corte.usuarioID.UsuarioID),
+    );
 
-    if (ultimoCorte) {
-      // 🔹 Usuario CON cortes: desde día del último corte
-      fechaDesde = new Date(ultimoCorte.FechaCorte);
-      // ⚠️ NO resetear a 00:00:00 porque queremos desde DESPUÉS del corte
-      // Si el corte fue a las 10 PM, queremos transacciones desde las 10 PM en adelante
-      // PERO si queremos considerar todo el día siguiente, entonces sí:
-      fechaDesde.setHours(0, 0, 0, 0);
-    } else {
-      // 🔹 Usuario SIN cortes: solo movimientos de HOY
-      fechaDesde = new Date(hoy);
-    }
+    // 4️⃣ Filtrar usuarios sin corte hoy
+    const usuariosSinCorteHoy = usuarios.filter(
+      (u) => !usuariosConCorteHoy.has(u.UsuarioID),
+    );
 
-    const fechaHasta = new Date(finDia);
+    const usuariosCandidatos = [];
 
-    console.log(`🔍 Usuario: ${usuario.NombreUsuario}`);
-    console.log(`   📅 Último corte: ${ultimoCorte?.FechaCorte || 'NUNCA'}`);
-    console.log(`   🕒 Buscando desde: ${fechaDesde.toISOString()}`);
-    console.log(`   🕒 Buscando hasta: ${fechaHasta.toISOString()}`);
-
-    // 🔍 Buscar transacciones
-    const transacciones = await this.transaccionesRepository.count({
-      where: {
-        UsuarioCreo: { UsuarioID: usuario.UsuarioID },
-        FechaTransaccion: Between(fechaDesde, fechaHasta),
-      },
-    });
-
-    // 🔍 Buscar pagos de póliza
-    const pagosPoliza = await this.pagosPolizaRepository.count({
-      where: {
-        Usuario: { UsuarioID: usuario.UsuarioID },
-        FechaPago: Between(fechaDesde, fechaHasta),
-        MotivoCancelacion: IsNull(),
-      },
-    });
-
-    console.log(`   📊 Resultado: ${transacciones} transacciones, ${pagosPoliza} pagos`);
-
-    // ✅ Si tiene movimientos, es candidato
-    if (transacciones > 0 || pagosPoliza > 0) {
-      usuariosCandidatos.push({
-        UsuarioID: usuario.UsuarioID,
-        Nombre: usuario.NombreUsuario,
-        ultimoCorte: ultimoCorte?.FechaCorte || null,
-        diasSinCorte: ultimoCorte 
-          ? Math.floor((new Date().getTime() - new Date(ultimoCorte.FechaCorte).getTime()) / (1000 * 60 * 60 * 24))
-          : 0,
-        movimientosPendientes: transacciones + pagosPoliza,
-        transacciones,
-        pagosPoliza,
+    for (const usuario of usuariosSinCorteHoy) {
+      // 📅 Buscar último corte
+      const ultimoCorte = await this.cortesUsuariosRepository.findOne({
+        where: {
+          usuarioID: { UsuarioID: usuario.UsuarioID },
+          Estatus: Not('Cancelado'),
+        },
+        order: { FechaCorte: 'DESC' },
       });
-    }
-  }
 
-  return usuariosCandidatos;
-}
+      let fechaDesde: Date;
+
+      if (ultimoCorte) {
+        // 🔹 Usuario CON cortes: desde día del último corte
+        fechaDesde = new Date(ultimoCorte.FechaCorte);
+        // ⚠️ NO resetear a 00:00:00 porque queremos desde DESPUÉS del corte
+        // Si el corte fue a las 10 PM, queremos transacciones desde las 10 PM en adelante
+        // PERO si queremos considerar todo el día siguiente, entonces sí:
+        fechaDesde.setHours(0, 0, 0, 0);
+      } else {
+        // 🔹 Usuario SIN cortes: solo movimientos de HOY
+        fechaDesde = new Date(hoy);
+      }
+
+      const fechaHasta = new Date(finDia);
+
+      console.log(`🔍 Usuario: ${usuario.NombreUsuario}`);
+      console.log(`   📅 Último corte: ${ultimoCorte?.FechaCorte || 'NUNCA'}`);
+      console.log(`   🕒 Buscando desde: ${fechaDesde.toISOString()}`);
+      console.log(`   🕒 Buscando hasta: ${fechaHasta.toISOString()}`);
+
+      // 🔍 Buscar transacciones
+      const transacciones = await this.transaccionesRepository.count({
+        where: {
+          UsuarioCreo: { UsuarioID: usuario.UsuarioID },
+          FechaTransaccion: Between(fechaDesde, fechaHasta),
+        },
+      });
+
+      // 🔍 Buscar pagos de póliza
+      const pagosPoliza = await this.pagosPolizaRepository.count({
+        where: {
+          Usuario: { UsuarioID: usuario.UsuarioID },
+          FechaPago: Between(fechaDesde, fechaHasta),
+          MotivoCancelacion: IsNull(),
+        },
+      });
+
+      console.log(`   📊 Resultado: ${transacciones} transacciones, ${pagosPoliza} pagos`);
+
+      // ✅ Si tiene movimientos, es candidato
+      if (transacciones > 0 || pagosPoliza > 0) {
+        usuariosCandidatos.push({
+          UsuarioID: usuario.UsuarioID,
+          Nombre: usuario.NombreUsuario,
+          ultimoCorte: ultimoCorte?.FechaCorte || null,
+          diasSinCorte: ultimoCorte
+            ? Math.floor((new Date().getTime() - new Date(ultimoCorte.FechaCorte).getTime()) / (1000 * 60 * 60 * 24))
+            : 0,
+          movimientosPendientes: transacciones + pagosPoliza,
+          transacciones,
+          pagosPoliza,
+        });
+      }
+    }
+
+    return usuariosCandidatos;
+  }
   /**
    * 🔹 Actualizar un corte de caja
    */
@@ -537,53 +537,56 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
   }*/
 
   async generarCorteCaja(usuarioID: number): Promise<GenerateCorteUsuarioDto> {
-    // Obtener la fecha actual en formato YYYY-MM-DD para el filtro
-
-    // Obtener la fecha del último corte de este usuario
+    // 1) Último corte del usuario (no cancelado)
     const ultimoCorte = await this.cortesUsuariosRepository.findOne({
       where: {
         usuarioID: { UsuarioID: usuarioID },
-        Estatus: Not('Cancelado'), // 🔹 Solo cortes válidos
+        Estatus: Not('Cancelado'),
       },
       order: { FechaCorte: 'DESC' },
     });
 
-    // Buscar inicio de caja activo del usuario
+    // 2) Inicio de caja activo del usuario
     const inicioCaja = await this.iniciosCajaRepository.findOne({
       where: { Usuario: { UsuarioID: usuarioID } },
     });
 
-    console.log(inicioCaja);
+    if (!inicioCaja) {
+      throw new HttpException(
+        'El usuario no tiene un Inicio de Caja activo',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
-    // 🕒 Rango de fechas: último corte → hoy
-    const fechaInicio = ultimoCorte
-      ? new Date(ultimoCorte.FechaCorte)
-      : new Date(inicioCaja.FechaInicio);
+    // 🕒 3) Rango de fechas correcto: desde el último corte (exclusivo) o desde el inicio
+    let fechaInicio: Date;
 
-    fechaInicio.setHours(0, 0, 0, 0);
+    if (ultimoCorte) {
+      // Desde JUSTO después del último corte
+      fechaInicio = new Date(ultimoCorte.FechaCorte.getTime() + 1000); // +1s
+    } else {
+      // Primer corte: desde el inicio de caja
+      fechaInicio = new Date(inicioCaja.FechaInicio);
+    }
 
-    const fechaFin = new Date();
-    fechaFin.setHours(23, 59, 59, 999);
+    const fechaFin = new Date(); // ahora mismo
 
-    // ✅ Corregir desfase de zona horaria (evita el problema de UTC)
-    fechaInicio.setTime(fechaInicio.getTime() - fechaInicio.getTimezoneOffset() * 60000);
-    fechaFin.setTime(fechaFin.getTime() - fechaFin.getTimezoneOffset() * 60000);
+    console.log('🕒 Rango real para el corte:', fechaInicio, fechaFin);
 
-    console.log('🕒 Rango local corregido:', fechaInicio, fechaFin);
+    // ❌ Ya no manipulamos horas ni timezone offset aquí
+    // fechaInicio.setHours(0, 0, 0, 0);
+    // fechaFin.setHours(23, 59, 59, 999);
+    // ni getTimezoneOffset
 
-
-    // ✅ VALIDACIÓN: no permitir corte si hay transacciones no efectivas y no validadas
-    // ✅ VALIDACIÓN: buscar transacciones no en efectivo y no validadas
+    // 4) VALIDACIÓN: transacciones NO validadas (no efectivo)
     const transaccionesNoValidadas = await this.transaccionesRepository.find({
       where: {
         UsuarioCreo: { UsuarioID: usuarioID },
         FechaTransaccion: Between(fechaInicio, fechaFin),
         FormaPago: In(['Transferencia', 'Deposito', 'Tarjeta']),
-        Validado: false, // 👈 usa boolean porque tu entidad lo maneja así
+        Validado: false,
       },
     });
-
-    console.log('🔍 Transacciones no validadas encontradas:', transaccionesNoValidadas);
 
     if (transaccionesNoValidadas.length > 0) {
       throw new HttpException(
@@ -592,7 +595,7 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
       );
     }
 
-
+    // 5) Ingresos y egresos en el rango (SOLO los nuevos)
     const ingresos =
       (await this.transaccionesRepository.find({
         where: {
@@ -601,8 +604,6 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
           FechaTransaccion: Between(fechaInicio, fechaFin),
         },
       })) || [];
-
-    console.log(ingresos);
 
     const egresos =
       (await this.transaccionesRepository.find({
@@ -613,7 +614,7 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
         },
       })) || [];
 
-    // **OBTENER PAGOS DE PÓLIZA DEL USUARIO FILTRADOS POR FECHA**
+    // 6) Pagos de póliza en el rango
     const pagosPoliza =
       (await this.pagosPolizaRepository.find({
         where: {
@@ -621,9 +622,10 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
           Usuario: { UsuarioID: usuarioID },
           FechaPago: Between(fechaInicio, fechaFin),
         },
-        relations: ['MetodoPago'], // Asegurar que la relación esté cargada
+        relations: ['MetodoPago'],
       })) || [];
 
+    // 7) Acumulados (igual que ya lo tenías)
     let totalIngresos = 0,
       totalEgresos = 0;
     let totalIngresosEfectivo = 0,
@@ -633,7 +635,6 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
       totalEgresosTarjeta = 0,
       totalEgresosTransferencia = 0;
 
-    // **SUMAMOS LOS INGRESOS**
     ingresos.forEach((transaccion) => {
       totalIngresos += Number(transaccion.Monto);
       if (transaccion.FormaPago === 'Efectivo')
@@ -647,7 +648,6 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
         totalIngresosTransferencia += Number(transaccion.Monto);
     });
 
-    // **SUMAMOS LOS EGRESOS**
     egresos.forEach((transaccion) => {
       totalEgresos += Number(transaccion.Monto);
       if (transaccion.FormaPago === 'Efectivo')
@@ -661,7 +661,6 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
         totalEgresosTransferencia += Number(transaccion.Monto);
     });
 
-    // **SUMAMOS LOS PAGOS DE PÓLIZA COMO INGRESOS**
     pagosPoliza.forEach((pago) => {
       totalIngresos += Number(pago.MontoPagado);
       if (pago.MetodoPago.IDMetodoPago === 3)
@@ -672,30 +671,22 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
         totalIngresosTransferencia += Number(pago.MontoPagado);
     });
 
-    console.log(pagosPoliza);
-
-    // **CALCULAMOS EL SALDO ESPERADO**
+    // 8) Saldo esperado a partir del InicioCaja
     const saldoEsperado =
       Number(inicioCaja.MontoInicial) + totalIngresos - totalEgresos;
 
-    // **🔥 CORRECCIÓN: INICIOS NO TIENE "TOTAL CON TARJETA"**
     const totalEfectivo =
       Number(inicioCaja.TotalEfectivo) +
       totalIngresosEfectivo -
       totalEgresosEfectivo;
-    console.log('inicios caja' + totalEgresosTransferencia);
+
     const totalTransferencia =
       Number(inicioCaja.TotalTransferencia) +
       totalIngresosTransferencia -
       totalEgresosTransferencia;
 
-    // 🔴 **ANTES ESTABA MAL**:
-    // const totalPagoConTarjeta = Number(inicioCaja.TotalTransferencia) + totalIngresosTarjeta - totalEgresosTarjeta;
-
-    // ✅ **CORRECCIÓN: Solo se suman ingresos y se restan egresos**
     const totalPagoConTarjeta = totalIngresosTarjeta - totalEgresosTarjeta;
 
-    // **VALIDACIÓN DE PAGOS NO VALIDADOS**
     const pagosNoValidados = pagosPoliza.filter(
       (pago) => pago.MetodoPago.IDMetodoPago !== 3 && !pago.Validado,
     );
@@ -717,7 +708,6 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
 
     const polizasMap = new Map(polizas.map((p) => [p.PolizaID, p]));
 
-    // **DEVOLVER DESGLOSE DE PAGOS Y MOVIMIENTOS**
     return {
       TotalIngresos: totalIngresos,
       TotalIngresosEfectivo: totalIngresosEfectivo,
@@ -738,24 +728,18 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
       Diferencia: 0,
       Observaciones: '',
       Estatus: 'Pendiente',
-
-      // 🔹 **Desglose de Ingresos**
       DetalleIngresos: ingresos.map((t) => ({
         Monto: t.Monto,
         FormaPago: t.FormaPago,
         Fecha: t.FechaTransaccion,
         Descripcion: t.Descripcion,
       })),
-
-      // 🔹 **Desglose de Egresos**
       DetalleEgresos: egresos.map((t) => ({
         Monto: t.Monto,
         FormaPago: t.FormaPago,
         Fecha: t.FechaTransaccion,
         Descripcion: t.Descripcion,
       })),
-
-      // 🔹 **Desglose de Pagos de Póliza**
       DetallePagosPoliza: pagosPoliza.map((p) => {
         const poliza = polizasMap.get(p.PolizaID);
         return {
@@ -772,6 +756,7 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
       }),
     };
   }
+
 
   async getCorteHistorialById(
     corteID: number,
@@ -1114,6 +1099,7 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
     const nuevoCorte = this.cortesUsuariosRepository.create({
       InicioCaja: inicioCaja,
       usuarioID: usuario,
+      Sucursal: sucursal,              // 👈 AQUÍ ESTABA LA CLAVE
       FechaCorte: new Date(),
       TotalIngresos: corteCalculado.TotalIngresos,
       TotalIngresosEfectivo: corteCalculado.TotalIngresosEfectivo,
@@ -1133,8 +1119,9 @@ async getUsuariosSinCorteHoy(): Promise<any[]> {
       TotalTransferenciaCapturado: totalTransferenciaCapturado,
       Diferencia: diferencia,
       Observaciones: observaciones || '',
-      Estatus: 'Cerrado', // Se guarda como cerrado
+      Estatus: 'Cerrado',
     });
+
 
     const corteGuardado = await this.cortesUsuariosRepository.save(nuevoCorte);
 
