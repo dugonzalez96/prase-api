@@ -386,22 +386,152 @@ export class CajaGeneralService {
         };
         entradasDetalle: CajaGeneralDashboardResponseDto['entradasDetalle'];
         egresosDetalle: CajaGeneralDashboardResponseDto['egresosDetalle'];
+
+        // 🔍 Analítica de valor
+        analitica: {
+            ultimoCuadreFecha: Date | null;
+            ultimoCuadreSaldoFinal: number;
+            promedioUltimosCuadres: {
+                diasConsiderados: number;
+                totalEntradas: number;
+                totalEgresos: number;
+                saldoFinal: number;
+            };
+            variacionVsPromedio: {
+                totalEntradasPct: number | null;
+                totalEgresosPct: number | null;
+                saldoCalculadoPct: number | null;
+            } | null;
+        };
+
+        // ✅ Control de si se puede cuadrar o no
+        puedeCuadrarHoy: boolean;
+        yaCuadradoHoy: boolean;
+        motivosBloqueo: string[];
     }> {
-        const dashboard = await this.getDashboard(dto);
+        const { fecha, sucursalId } = dto;
+        const { start, end } = this.getDayRange(fecha);
+
+        // 📊 Foto del día (pre-cuadre actual)
+        const dashboard = await this.getDashboard({ fecha, sucursalId });
+
+        // 🧱 1) Validar si ya existe un cuadre de caja general para esta fecha
+        const cuadreHoy = await this.cajaGeneralRepo.findOne({
+            where: {
+                Fecha: Between(start, end),
+                Estatus: 'Cerrado',
+                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
+            },
+            relations: ['Sucursal', 'UsuarioCuadre'],
+        });
+
+        const yaCuadradoHoy = !!cuadreHoy;
+
+        const motivosBloqueo: string[] = [];
+        let puedeCuadrarHoy = true;
+
+        if (yaCuadradoHoy) {
+            puedeCuadrarHoy = false;
+            motivosBloqueo.push(
+                'Ya existe un cuadre de Caja General para esta fecha. Solo se permite un cuadre por día.',
+            );
+        }
+
+        // 🧮 2) Analítica de valor vs cuadres anteriores
+        // Traemos los últimos N cuadres cerrados ANTES de la fecha seleccionada
+        const historico = await this.cajaGeneralRepo.find({
+            where: {
+                Fecha: LessThanOrEqual(start),
+                Estatus: 'Cerrado',
+                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
+            },
+            order: { Fecha: 'DESC' },
+            take: 7, // por ejemplo últimos 7 cuadres
+        });
+
+        const ultimoCuadre = historico.length > 0 ? historico[0] : null;
+
+        const diasConsiderados = historico.length;
+
+        let promedioTotalEntradas = 0;
+        let promedioTotalEgresos = 0;
+        let promedioSaldoFinal = 0;
+
+        if (diasConsiderados > 0) {
+            promedioTotalEntradas =
+                historico.reduce(
+                    (acc, c) => acc + Number(c.TotalIngresos ?? 0),
+                    0,
+                ) / diasConsiderados;
+
+            promedioTotalEgresos =
+                historico.reduce(
+                    (acc, c) => acc + Number(c.TotalEgresos ?? 0),
+                    0,
+                ) / diasConsiderados;
+
+            promedioSaldoFinal =
+                historico.reduce(
+                    (acc, c) => acc + Number(c.SaldoFinal ?? 0),
+                    0,
+                ) / diasConsiderados;
+        }
+
+        const pre = dashboard.preCuadre;
+
+        const calcVarPct = (actual: number, base: number): number | null => {
+            if (!base || base === 0) return null;
+            return ((actual - base) / base) * 100;
+        };
+
+        const variacionVsPromedio =
+            diasConsiderados > 0
+                ? {
+                    totalEntradasPct: calcVarPct(
+                        pre.totalEntradas,
+                        promedioTotalEntradas,
+                    ),
+                    totalEgresosPct: calcVarPct(
+                        pre.totalEgresos,
+                        promedioTotalEgresos,
+                    ),
+                    saldoCalculadoPct: calcVarPct(
+                        pre.saldoCalculado,
+                        promedioSaldoFinal,
+                    ),
+                }
+                : null;
+
+        const analitica = {
+            ultimoCuadreFecha: ultimoCuadre?.Fecha ?? null,
+            ultimoCuadreSaldoFinal: Number(ultimoCuadre?.SaldoFinal ?? 0),
+            promedioUltimosCuadres: {
+                diasConsiderados,
+                totalEntradas: promedioTotalEntradas,
+                totalEgresos: promedioTotalEgresos,
+                saldoFinal: promedioSaldoFinal,
+            },
+            variacionVsPromedio,
+        };
 
         return {
             filtros: dashboard.filtros,
             preCuadre: dashboard.preCuadre,
             entradasDetalle: dashboard.entradasDetalle,
             egresosDetalle: dashboard.egresosDetalle,
+            analitica,
+            puedeCuadrarHoy,
+            yaCuadradoHoy,
+            motivosBloqueo,
         };
     }
+
 
     // CUADRAR CAJA GENERAL
     async cuadrarCajaGeneral(dto: CuadrarCajaGeneralDto): Promise<CajaGeneral> {
         const {
             fecha,
-            sucursalId,
+            sucursalId, // 👈 se usa solo para metadata, NO para filtrar totales
             usuarioCuadreId,
             observaciones,
             folioCierre,
@@ -413,9 +543,11 @@ export class CajaGeneralService {
 
         const { end } = this.getDayRange(fecha);
 
-        // Foto oficial del sistema al momento de cuadrar
-        const dashboard = await this.getDashboard({ fecha, sucursalId });
+        // 🔹 IMPORTANTE:
+        // El pre-cuadre SIEMPRE se calcula GLOBAL (todas las sucursales)
+        const dashboard = await this.getDashboard({ fecha, sucursalId: undefined });
 
+        // La sucursal aquí es SOLO informativa (quién operó / desde qué sucursal)
         const sucursal = sucursalId
             ? await this.sucursalRepo.findOne({
                 where: { SucursalID: sucursalId },
@@ -434,11 +566,14 @@ export class CajaGeneralService {
         }
 
         const saldoCalculado = dashboard.preCuadre.saldoCalculado;
+
+        // Si el front no manda saldoReal, asumimos cuadre perfecto
         const saldoRealUsado =
             typeof saldoReal === 'number' ? saldoReal : saldoCalculado;
+
         const diferencia = saldoRealUsado - saldoCalculado;
 
-        // Total que proviene específicamente de cortes de caja chica
+        // Entradas provenientes de cortes de caja chica (GLOBAL)
         const totalDesdeCajaChica =
             dashboard.entradasDetalle.cortesCajaChica.reduce(
                 (acc, mov) => acc + mov.monto,
@@ -447,17 +582,23 @@ export class CajaGeneralService {
 
         const cajaGeneral = new CajaGeneral();
         cajaGeneral.Fecha = end;
+
+        // 📌 Si Sucursal es null => cuadre GLOBAL.
+        // Si tiene sucursal => "cuadre global realizado desde sucursal X".
         cajaGeneral.Sucursal = sucursal || null;
+
+        // Resumen base
         cajaGeneral.SaldoAnterior = dashboard.resumen.saldoInicial;
         cajaGeneral.IngresosCajaChica = totalDesdeCajaChica;
         cajaGeneral.TotalIngresos = dashboard.preCuadre.totalEntradas;
         cajaGeneral.TotalEgresos = dashboard.preCuadre.totalEgresos;
 
-        // Si luego quieres mapear teórico por medios, lo hacemos; por ahora 0
+        // Totales teóricos por medio (si más adelante quieres llenarlos, aquí se hace)
         cajaGeneral.TotalEfectivo = 0;
         cajaGeneral.TotalPagoConTarjeta = 0;
         cajaGeneral.TotalTransferencia = 0;
 
+        // Esperado vs Real
         cajaGeneral.SaldoEsperado = saldoCalculado;
         cajaGeneral.SaldoReal = saldoRealUsado;
 
@@ -465,10 +606,12 @@ export class CajaGeneralService {
             typeof totalEfectivoCapturado === 'number'
                 ? totalEfectivoCapturado
                 : null;
+
         cajaGeneral.TotalTarjetaCapturado =
             typeof totalTarjetaCapturado === 'number'
                 ? totalTarjetaCapturado
                 : null;
+
         cajaGeneral.TotalTransferenciaCapturado =
             typeof totalTransferenciaCapturado === 'number'
                 ? totalTransferenciaCapturado
@@ -483,6 +626,7 @@ export class CajaGeneralService {
 
         return this.cajaGeneralRepo.save(cajaGeneral);
     }
+
 
     async crearMovimientoCajaGeneral(
         dto: CreateMovimientoCajaGeneralDto,
