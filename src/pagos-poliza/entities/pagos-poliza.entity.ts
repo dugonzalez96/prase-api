@@ -3,6 +3,7 @@ import { EstatusPago } from 'src/estatus-pago/entities/estatus-pago.entity';
 import { MetodosPago } from 'src/metodos-pago/entities/metodos-pago.entity';
 import { usuarios } from 'src/users/users.entity';
 import { CuentasBancarias } from 'src/cuentas-bancarias/entities/cuentas-bancarias.entity';
+import { CortesUsuarios } from 'src/corte-caja/entities/cortes-usuarios.entity';
 
 @Entity('PagosPoliza')
 export class PagosPoliza {
@@ -52,4 +53,10 @@ export class PagosPoliza {
 
   @Column({ length: 255, nullable: true })
   MotivoCancelacion: string;
+
+  @ManyToOne(() => CortesUsuarios, (corte) => corte.PagosPoliza, {
+    nullable: true,
+  })
+  @JoinColumn({ name: 'CorteUsuarioID' })
+  CorteUsuario: CortesUsuarios;
 }

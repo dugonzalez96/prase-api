@@ -6,10 +6,14 @@ import {
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from 'typeorm';
 import { IniciosCaja } from 'src/inicios-caja/entities/inicios-caja.entity';
 import { usuarios } from 'src/users/users.entity';
 import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
+import { Transacciones } from 'src/transacciones/entities/transacciones.entity';
+import { PagosPoliza } from 'src/pagos-poliza/entities/pagos-poliza.entity';
+import { CajaChica } from 'src/caja-chica/entities/caja-chica.entity';
 
 @Entity('CortesUsuarios')
 export class CortesUsuarios {
@@ -99,4 +103,18 @@ export class CortesUsuarios {
     nullable: true,
   })
   Estatus: 'Pendiente' | 'Cerrado' | 'Validado' | 'Cancelado';
+
+  @OneToMany(() => Transacciones, (t) => t.CorteUsuario)
+  Transacciones: Transacciones[];
+
+  @OneToMany(() => PagosPoliza, (p) => p.CorteUsuario)
+  PagosPoliza: PagosPoliza[];
+
+  @ManyToOne(() => CajaChica, (caja) => caja.CortesUsuarios, {
+    nullable: true,
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE',
+  })
+  @JoinColumn({ name: 'CajaChicaID' })
+  CajaChica: CajaChica | null;
 }

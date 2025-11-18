@@ -951,6 +951,7 @@ export class CortesUsuariosService {
         HttpStatus.BAD_REQUEST,
       );
     }
+
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0); // Inicio del día
 
@@ -975,55 +976,7 @@ export class CortesUsuariosService {
       );
     }
 
-    /*  // **Verificar si el usuario tiene cortes previos**
-      const cortesPrevios = await this.cortesUsuariosRepository.count({
-        where: { InicioCaja: { Usuario: { UsuarioID: usuarioID } } },
-      });
-  
-      if (cortesPrevios > 0) {
-        // **Determinar el día anterior laborable**
-        let diaAnterior = new Date(hoy);
-        const diaSemana = hoy.getDay(); // 0: Domingo, 1: Lunes, ..., 6: Sábado
-  
-        if (diaSemana === 1) {
-          // Si es lunes, validar contra el sábado anterior
-          diaAnterior.setDate(hoy.getDate() - 2);
-        } else {
-          // Para cualquier otro día, validar el día anterior normal
-          diaAnterior.setDate(hoy.getDate() - 1);
-        }
-  
-        // **Verificar si hay un corte cerrado para el día anterior**
-        const corteAnterior = await this.cortesUsuariosRepository.findOne({
-          where: {
-            InicioCaja: { Usuario: { UsuarioID: usuarioID } },
-            FechaCorte: Between(
-              diaAnterior,
-              new Date(diaAnterior.getTime() + 86400000),
-            ), // Rango del día anterior
-            Estatus: 'Cerrado', // Solo cortes cerrados
-          },
-          relations: ['InicioCaja'],
-        });
-  
-        if (
-          !corteAnterior ||
-          corteAnterior.InicioCaja.Usuario.UsuarioID !== usuarioID
-        ) {
-          throw new HttpException(
-            `No puedes generar un corte hoy porque no hay un corte cerrado para el día anterior (${diaAnterior.toISOString().split('T')[0]})`,
-            HttpStatus.BAD_REQUEST,
-          );
-        }
-      } else {
-        console.log(
-          `🔹 Es el primer corte del usuario ${usuarioID}, omitiendo validación de corte anterior.`,
-        );
-      }
-  
-      console.log(`Validando corte del día anterior completado.`);*/
-
-    // **Primero generamos el corte de caja automático**
+    // **Primero generamos el corte de caja automático (NO se toca la lógica)**
     const corteCalculado = await this.generarCorteCaja(usuarioID);
 
     // **Obtener el inicio de caja activo del usuario**
@@ -1065,15 +1018,6 @@ export class CortesUsuariosService {
     // **Calculamos la diferencia entre el saldo esperado y el saldo real**
     const diferencia = saldoReal - corteCalculado.SaldoEsperado;
 
-    /*if (
-      corteCalculado.TotalIngresos === 0 &&
-      corteCalculado.TotalEgresos === 0
-    ) {
-      throw new HttpException(
-        'No se puede generar un corte de caja sin ingresos ni egresos.',
-        HttpStatus.BAD_REQUEST,
-      );
-    }*/
     const usuario = await this.usersRepository.findOne({
       where: { UsuarioID: usuarioID },
     });
@@ -1094,12 +1038,11 @@ export class CortesUsuariosService {
       );
     }
 
-
     // **Guardar el corte en la base de datos**
     const nuevoCorte = this.cortesUsuariosRepository.create({
       InicioCaja: inicioCaja,
       usuarioID: usuario,
-      Sucursal: sucursal,              // 👈 AQUÍ ESTABA LA CLAVE
+      Sucursal: sucursal, // 👈 ahora sí amarramos sucursal al corte
       FechaCorte: new Date(),
       TotalIngresos: corteCalculado.TotalIngresos,
       TotalIngresosEfectivo: corteCalculado.TotalIngresosEfectivo,
@@ -1122,13 +1065,45 @@ export class CortesUsuariosService {
       Estatus: 'Cerrado',
     });
 
-
     const corteGuardado = await this.cortesUsuariosRepository.save(nuevoCorte);
 
     // **Actualizar el inicio de caja para marcarlo como "Cerrado"**
     inicioCaja.Estatus = 'Cerrado';
     await this.iniciosCajaRepository.save(inicioCaja);
 
+    // 🔗 NUEVO: Amarrar Transacciones y PagosPoliza a este corte
+    // Usamos mismo usuario y rango del día actual (hoy..mañana),
+    // respetando la lógica que ya usas para el corte.
+    const transaccionesDelCorte = await this.transaccionesRepository.find({
+      where: {
+        UsuarioCreo: { UsuarioID: usuarioID },
+        FechaTransaccion: Between(hoy, mañana),
+      },
+    });
+
+    for (const t of transaccionesDelCorte) {
+      (t as any).CorteUsuario = corteGuardado;
+    }
+    if (transaccionesDelCorte.length > 0) {
+      await this.transaccionesRepository.save(transaccionesDelCorte);
+    }
+
+    const pagosPolizaDelCorte = await this.pagosPolizaRepository.find({
+      where: {
+        Usuario: { UsuarioID: usuarioID },
+        FechaPago: Between(hoy, mañana),
+        MotivoCancelacion: null,
+      },
+    });
+
+    for (const p of pagosPolizaDelCorte) {
+      (p as any).CorteUsuario = corteGuardado;
+    }
+    if (pagosPolizaDelCorte.length > 0) {
+      await this.pagosPolizaRepository.save(pagosPolizaDelCorte);
+    }
+
     return corteGuardado;
   }
+
 }

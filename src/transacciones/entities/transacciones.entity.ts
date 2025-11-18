@@ -10,6 +10,7 @@ import {
 import { IniciosCaja } from 'src/inicios-caja/entities/inicios-caja.entity';
 import { usuarios } from 'src/users/users.entity';
 import { CuentasBancarias } from 'src/cuentas-bancarias/entities/cuentas-bancarias.entity';
+import { CortesUsuarios } from 'src/corte-caja/entities/cortes-usuarios.entity';
 
 @Entity('Transacciones')
 export class Transacciones {
@@ -68,4 +69,13 @@ export class Transacciones {
 
   @Column({ length: 255, nullable: true })
   Descripcion: string;
+
+  @ManyToOne(() => CortesUsuarios, (corte) => corte.Transacciones, {
+    nullable: true,
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE',
+})
+@JoinColumn({ name: 'CorteUsuarioID' })
+CorteUsuario: CortesUsuarios | null;
+
 }

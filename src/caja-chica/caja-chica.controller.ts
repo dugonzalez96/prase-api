@@ -10,19 +10,24 @@ export class CajaChicaController {
     constructor(private readonly cajaChicaService: CajaChicaService) { }
 
     // Precuadre del día (resumen para UI)
-    @Get('precuadre')
-    async precuadre() {
-        return this.cajaChicaService.precuadre();
+    // caja-chica.controller.ts
+    @Get('precuadre/:sucursalId')
+    precuadre(@Param('sucursalId') sucursalId: string) {
+        return this.cajaChicaService.precuadre(Number(sucursalId));
     }
 
+
     // Cuadrar caja chica (usa el usuario autenticado; fallback a 1)
-    @Post('cuadrar/:usuarioID')
-    async cuadrarConParam(
-        @Param('usuarioID') usuarioID: number,
+    @Post('cuadrar/:sucursalId')
+    cuadrar(
+        @Param('sucursalId', ParseIntPipe) sucursalId: number,
+        @Req() req,
         @Body() dto: CreateCajaChicaDto,
     ) {
-        return this.cajaChicaService.cuadrarCajaChica(usuarioID, dto);
+        const usuarioID = req.user.UsuarioID;
+        return this.cajaChicaService.cuadrarCajaChica(usuarioID, sucursalId, dto);
     }
+
 
 
     // Historial

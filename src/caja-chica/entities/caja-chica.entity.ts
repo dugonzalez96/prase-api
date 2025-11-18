@@ -7,9 +7,11 @@ import {
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  OneToMany,
 } from 'typeorm';
 import { usuarios } from 'src/users/users.entity';
 import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
+import { CortesUsuarios } from 'src/corte-caja/entities/cortes-usuarios.entity';
 
 export type EstatusCajaChica = 'Pendiente' | 'Cerrado' | 'Cancelado';
 
@@ -27,6 +29,9 @@ export class CajaChica {
     onUpdate: 'CURRENT_TIMESTAMP',
   })
   FechaActualizacion: Date;
+
+  @OneToMany(() => CortesUsuarios, (corte) => corte.CajaChica)
+  CortesUsuarios: CortesUsuarios[];
 
   @Column({ type: 'datetime', nullable: true })
   FechaCierre: Date | null;
