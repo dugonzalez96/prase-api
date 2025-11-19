@@ -357,16 +357,50 @@ export class CajaGeneralService {
 
 
     // SERVICIO SEPARADO PARA PRE-CUADRE (lo que enseñas en el panel previo al cierre)
+    // SERVICIO SEPARADO PARA PRE-CUADRE (lo que enseñas en el panel previo al cierre)
     async getPreCuadre(
         dto: GetCajaGeneralDashboardDto,
-    ) {
+    ): Promise<{
+        filtros: { fecha: string; sucursalId?: number };
+        preCuadre: {
+            saldoInicial: number;
+            totalEntradas: number;
+            totalEgresos: number;
+            saldoCalculado: number;
+            diferencia: number;
+        };
+        entradasDetalle: CajaGeneralDashboardResponseDto['entradasDetalle'];
+        egresosDetalle: CajaGeneralDashboardResponseDto['egresosDetalle'];
+
+        analitica: {
+            ultimoCuadreFecha: Date | null;
+            ultimoCuadreSaldoFinal: number;
+            promedioUltimosCuadres: {
+                diasConsiderados: number;
+                totalEntradas: number;
+                totalEgresos: number;
+                saldoFinal: number;
+            };
+            variacionVsPromedio: {
+                totalEntradasPct: number | null;
+                totalEgresosPct: number | null;
+                saldoCalculadoPct: number | null;
+            } | null;
+        };
+
+        puedeCuadrarHoy: boolean;
+        yaCuadradoHoy: boolean;
+        motivosBloqueo: string[];
+    }> {
         const { fecha, sucursalId } = dto;
 
-        // ⬇️ Rango LOCAL→UTC
+        // ⬇️ Rango LOCAL→UTC para revisiones de "hoy"
         const { startUTC: start, endUTC: end } = this.getLocalDayRangeToUTC(fecha);
 
+        // Foto del día (esto ya trae preCuadre armado con 0 si no hay nada)
         const dashboard = await this.getDashboard({ fecha, sucursalId });
 
+        // 1) ¿Ya existe cuadre de hoy?
         const cuadreHoy = await this.cajaGeneralRepo.findOne({
             where: {
                 Fecha: Between(start, end),
@@ -388,6 +422,7 @@ export class CajaGeneralService {
             );
         }
 
+        // 2) Analítica vs cuadres anteriores
         const historico = await this.cajaGeneralRepo.find({
             where: {
                 Fecha: LessThanOrEqual(start),
@@ -398,11 +433,99 @@ export class CajaGeneralService {
             take: 7,
         });
 
-        // ... resto igual (promedios, variaciones, etc.)
-        // no requiere cambio de tz porque ya usamos 'start'
+        const ultimoCuadre = historico.length > 0 ? historico[0] : null;
+        const diasConsiderados = historico.length;
 
-        // (no repito todo para no hacerlo eterno, pero es la misma lógica que ya tienes)
-        // solo asegúrate de que sigas usando 'start' obtenido de getLocalDayRangeToUTC
+        let promedioTotalEntradas = 0;
+        let promedioTotalEgresos = 0;
+        let promedioSaldoFinal = 0;
+
+        if (diasConsiderados > 0) {
+            promedioTotalEntradas =
+                historico.reduce(
+                    (acc, c) => acc + Number(c.TotalIngresos ?? 0),
+                    0,
+                ) / diasConsiderados;
+
+            promedioTotalEgresos =
+                historico.reduce(
+                    (acc, c) => acc + Number(c.TotalEgresos ?? 0),
+                    0,
+                ) / diasConsiderados;
+
+            promedioSaldoFinal =
+                historico.reduce(
+                    (acc, c) => acc + Number(c.SaldoFinal ?? 0),
+                    0,
+                ) / diasConsiderados;
+        }
+
+        const pre = dashboard.preCuadre;
+
+        const calcVarPct = (actual: number, base: number): number | null => {
+            if (!base || base === 0) return null;
+            return ((actual - base) / base) * 100;
+        };
+
+        const variacionVsPromedio =
+            diasConsiderados > 0
+                ? {
+                    totalEntradasPct: calcVarPct(
+                        pre.totalEntradas,
+                        promedioTotalEntradas,
+                    ),
+                    totalEgresosPct: calcVarPct(
+                        pre.totalEgresos,
+                        promedioTotalEgresos,
+                    ),
+                    saldoCalculadoPct: calcVarPct(
+                        pre.saldoCalculado,
+                        promedioSaldoFinal,
+                    ),
+                }
+                : null;
+
+        const analitica = {
+            ultimoCuadreFecha: ultimoCuadre?.Fecha ?? null,
+            ultimoCuadreSaldoFinal: Number(ultimoCuadre?.SaldoFinal ?? 0),
+            promedioUltimosCuadres: {
+                diasConsiderados,
+                totalEntradas: promedioTotalEntradas,
+                totalEgresos: promedioTotalEgresos,
+                saldoFinal: promedioSaldoFinal,
+            },
+            variacionVsPromedio,
+        };
+
+        // ⚠️ Aquí es donde garantizamos estructura y defaults:
+        return {
+            filtros: {
+                fecha: dashboard.filtros.fecha,
+                sucursalId: dashboard.filtros.sucursalId,
+            },
+            preCuadre: {
+                saldoInicial: pre.saldoInicial ?? 0,
+                totalEntradas: pre.totalEntradas ?? 0,
+                totalEgresos: pre.totalEgresos ?? 0,
+                saldoCalculado: pre.saldoCalculado ?? 0,
+                diferencia: pre.diferencia ?? 0,
+            },
+            entradasDetalle: {
+                cortesCajaChica:
+                    dashboard.entradasDetalle?.cortesCajaChica ?? [],
+                pagosPoliza: dashboard.entradasDetalle?.pagosPoliza ?? [],
+                transaccionesIngreso:
+                    dashboard.entradasDetalle?.transaccionesIngreso ?? [],
+            },
+            egresosDetalle: {
+                transaccionesEgreso:
+                    dashboard.egresosDetalle?.transaccionesEgreso ?? [],
+            },
+            analitica,
+            puedeCuadrarHoy,
+            yaCuadradoHoy,
+            motivosBloqueo,
+        };
     }
 
 
