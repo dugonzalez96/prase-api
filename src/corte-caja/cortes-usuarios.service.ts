@@ -1,6 +1,6 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, IsNull, Not, Repository } from 'typeorm';
+import { Between, In, IsNull, MoreThanOrEqual, Not, Repository } from 'typeorm';
 import { IniciosCaja } from 'src/inicios-caja/entities/inicios-caja.entity';
 import { Transacciones } from 'src/transacciones/entities/transacciones.entity';
 import { PagosPoliza } from 'src/pagos-poliza/entities/pagos-poliza.entity';
@@ -536,8 +536,8 @@ export class CortesUsuariosService {
     };
   }*/
 
+
   async generarCorteCaja(usuarioID: number): Promise<GenerateCorteUsuarioDto> {
-    // 1) Último corte del usuario (no cancelado)
     const ultimoCorte = await this.cortesUsuariosRepository.findOne({
       where: {
         usuarioID: { UsuarioID: usuarioID },
@@ -546,7 +546,6 @@ export class CortesUsuariosService {
       order: { FechaCorte: 'DESC' },
     });
 
-    // 2) Inicio de caja activo del usuario
     const inicioCaja = await this.iniciosCajaRepository.findOne({
       where: { Usuario: { UsuarioID: usuarioID } },
     });
@@ -558,35 +557,30 @@ export class CortesUsuariosService {
       );
     }
 
-    // 🕒 3) Rango de fechas correcto: desde el último corte (exclusivo) o desde el inicio
-    let fechaInicio: Date;
-
+    let fechaReferencia: Date;
     if (ultimoCorte) {
-      // Desde JUSTO después del último corte
-      fechaInicio = new Date(ultimoCorte.FechaCorte.getTime() + 1000); // +1s
+      fechaReferencia = new Date(ultimoCorte.FechaCorte);
     } else {
-      // Primer corte: desde el inicio de caja
-      fechaInicio = new Date(inicioCaja.FechaInicio);
+      fechaReferencia = new Date(inicioCaja.FechaInicio);
     }
 
-    const fechaFin = new Date(); // ahora mismo
+    const formatoFecha = (fecha: Date) => {
+      const year = fecha.getFullYear();
+      const month = String(fecha.getMonth() + 1).padStart(2, '0');
+      const day = String(fecha.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
 
-    console.log('🕒 Rango real para el corte:', fechaInicio, fechaFin);
+    const fechaBusqueda = formatoFecha(fechaReferencia);
 
-    // ❌ Ya no manipulamos horas ni timezone offset aquí
-    // fechaInicio.setHours(0, 0, 0, 0);
-    // fechaFin.setHours(23, 59, 59, 999);
-    // ni getTimezoneOffset
-
-    // 4) VALIDACIÓN: transacciones NO validadas (no efectivo)
-    const transaccionesNoValidadas = await this.transaccionesRepository.find({
-      where: {
-        UsuarioCreo: { UsuarioID: usuarioID },
-        FechaTransaccion: Between(fechaInicio, fechaFin),
-        FormaPago: In(['Transferencia', 'Deposito', 'Tarjeta']),
-        Validado: false,
-      },
-    });
+    const transaccionesNoValidadas = await this.transaccionesRepository
+      .createQueryBuilder('t')
+      .leftJoin('t.UsuarioCreo', 'u')
+      .where('u.UsuarioID = :usuarioID', { usuarioID })
+      .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
+      .andWhere('t.FormaPago IN (:...formasPago)', { formasPago: ['Transferencia', 'Deposito', 'Tarjeta'] })
+      .andWhere('t.Validado = :validado', { validado: false })
+      .getMany();
 
     if (transaccionesNoValidadas.length > 0) {
       throw new HttpException(
@@ -595,37 +589,44 @@ export class CortesUsuariosService {
       );
     }
 
-    // 5) Ingresos y egresos en el rango (SOLO los nuevos)
-    const ingresos =
-      (await this.transaccionesRepository.find({
-        where: {
-          TipoTransaccion: 'Ingreso',
-          UsuarioCreo: { UsuarioID: usuarioID },
-          FechaTransaccion: Between(fechaInicio, fechaFin),
-        },
-      })) || [];
+    const ingresos = await this.transaccionesRepository
+      .createQueryBuilder('t')
+      .leftJoin('t.UsuarioCreo', 'u')
+      .where('t.TipoTransaccion = :tipo', { tipo: 'Ingreso' })
+      .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
+      .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
+      .getMany();
 
-    const egresos =
-      (await this.transaccionesRepository.find({
-        where: {
-          TipoTransaccion: 'Egreso',
-          UsuarioCreo: { UsuarioID: usuarioID },
-          FechaTransaccion: Between(fechaInicio, fechaFin),
-        },
-      })) || [];
+    const egresos = await this.transaccionesRepository
+      .createQueryBuilder('t')
+      .leftJoin('t.UsuarioCreo', 'u')
+      .where('t.TipoTransaccion = :tipo', { tipo: 'Egreso' })
+      .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
+      .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
+      .getMany();
 
-    // 6) Pagos de póliza en el rango
-    const pagosPoliza =
-      (await this.pagosPolizaRepository.find({
-        where: {
-          MotivoCancelacion: null,
-          Usuario: { UsuarioID: usuarioID },
-          FechaPago: Between(fechaInicio, fechaFin),
-        },
-        relations: ['MetodoPago'],
-      })) || [];
+    const pagosPoliza = await this.pagosPolizaRepository
+      .createQueryBuilder('p')
+      .leftJoin('p.Usuario', 'u')
+      .leftJoinAndSelect('p.MetodoPago', 'm')
+      .where('p.MotivoCancelacion IS NULL')
+      .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
+      .andWhere('DATE(p.FechaPago) >= :fecha', { fecha: fechaBusqueda })
+      .getMany();
 
-    // 7) Acumulados (igual que ya lo tenías)
+    console.log('📊 Resultados de consultas:', {
+      ingresos: ingresos.length,
+      egresos: egresos.length,
+      pagosPoliza: pagosPoliza.length,
+    });
+
+    // 🔍 DEBUG DETALLADO DE INICIO DE CAJA
+    console.log('💰 INICIO DE CAJA:', {
+      MontoInicial: Number(inicioCaja.MontoInicial),
+      TotalEfectivo: Number(inicioCaja.TotalEfectivo),
+      TotalTransferencia: Number(inicioCaja.TotalTransferencia),
+    });
+
     let totalIngresos = 0,
       totalEgresos = 0;
     let totalIngresosEfectivo = 0,
@@ -635,43 +636,82 @@ export class CortesUsuariosService {
       totalEgresosTarjeta = 0,
       totalEgresosTransferencia = 0;
 
+    // 🔍 DEBUG INGRESOS
+    console.log('💵 INGRESOS:');
     ingresos.forEach((transaccion) => {
-      totalIngresos += Number(transaccion.Monto);
+      const monto = Number(transaccion.Monto);
+      totalIngresos += monto;
+
+      console.log(`  ➕ ${transaccion.FormaPago}: $${monto} - ${transaccion.Descripcion}`);
+
       if (transaccion.FormaPago === 'Efectivo')
-        totalIngresosEfectivo += Number(transaccion.Monto);
+        totalIngresosEfectivo += monto;
       if (transaccion.FormaPago === 'Tarjeta')
-        totalIngresosTarjeta += Number(transaccion.Monto);
+        totalIngresosTarjeta += monto;
       if (
         transaccion.FormaPago === 'Transferencia' ||
         transaccion.FormaPago === 'Deposito'
       )
-        totalIngresosTransferencia += Number(transaccion.Monto);
+        totalIngresosTransferencia += monto;
     });
 
+    console.log('📤 TOTALES INGRESOS:', {
+      Total: totalIngresos,
+      Efectivo: totalIngresosEfectivo,
+      Tarjeta: totalIngresosTarjeta,
+      Transferencia: totalIngresosTransferencia,
+    });
+
+    // 🔍 DEBUG EGRESOS
+    console.log('💸 EGRESOS:');
     egresos.forEach((transaccion) => {
-      totalEgresos += Number(transaccion.Monto);
+      const monto = Number(transaccion.Monto);
+      totalEgresos += monto;
+
+      console.log(`  ➖ ${transaccion.FormaPago}: $${monto} - ${transaccion.Descripcion}`);
+
       if (transaccion.FormaPago === 'Efectivo')
-        totalEgresosEfectivo += Number(transaccion.Monto);
+        totalEgresosEfectivo += monto;
       if (transaccion.FormaPago === 'Tarjeta')
-        totalEgresosTarjeta += Number(transaccion.Monto);
+        totalEgresosTarjeta += monto;
       if (
         transaccion.FormaPago === 'Transferencia' ||
         transaccion.FormaPago === 'Deposito'
       )
-        totalEgresosTransferencia += Number(transaccion.Monto);
+        totalEgresosTransferencia += monto;
     });
 
+    console.log('📥 TOTALES EGRESOS:', {
+      Total: totalEgresos,
+      Efectivo: totalEgresosEfectivo,
+      Tarjeta: totalEgresosTarjeta,
+      Transferencia: totalEgresosTransferencia,
+    });
+
+    // 🔍 DEBUG PAGOS PÓLIZA
+    console.log('📋 PAGOS PÓLIZA:');
     pagosPoliza.forEach((pago) => {
-      totalIngresos += Number(pago.MontoPagado);
+      const monto = Number(pago.MontoPagado);
+      totalIngresos += monto;
+
+      console.log(`  💳 Método ${pago.MetodoPago.IDMetodoPago} (${pago.MetodoPago?.NombreMetodo}): $${monto}`);
+
       if (pago.MetodoPago.IDMetodoPago === 3)
-        totalIngresosEfectivo += Number(pago.MontoPagado);
+        totalIngresosEfectivo += monto;
       if (pago.MetodoPago.IDMetodoPago === 4)
-        totalIngresosTarjeta += Number(pago.MontoPagado);
+        totalIngresosTarjeta += monto;
       if ([1, 2].includes(pago.MetodoPago.IDMetodoPago))
-        totalIngresosTransferencia += Number(pago.MontoPagado);
+        totalIngresosTransferencia += monto;
     });
 
-    // 8) Saldo esperado a partir del InicioCaja
+    console.log('📋 TOTALES DESPUÉS DE PAGOS PÓLIZA:', {
+      TotalIngresos: totalIngresos,
+      IngresosEfectivo: totalIngresosEfectivo,
+      IngresosTarjeta: totalIngresosTarjeta,
+      IngresosTransferencia: totalIngresosTransferencia,
+    });
+
+    // 🔍 DEBUG CÁLCULOS FINALES
     const saldoEsperado =
       Number(inicioCaja.MontoInicial) + totalIngresos - totalEgresos;
 
@@ -686,6 +726,21 @@ export class CortesUsuariosService {
       totalEgresosTransferencia;
 
     const totalPagoConTarjeta = totalIngresosTarjeta - totalEgresosTarjeta;
+
+    console.log('🧮 CÁLCULO TOTAL EFECTIVO:', {
+      InicioCajaTotalEfectivo: Number(inicioCaja.TotalEfectivo),
+      MAS_IngresosEfectivo: totalIngresosEfectivo,
+      MENOS_EgresosEfectivo: totalEgresosEfectivo,
+      RESULTADO: totalEfectivo,
+      FORMULA: `${Number(inicioCaja.TotalEfectivo)} + ${totalIngresosEfectivo} - ${totalEgresosEfectivo} = ${totalEfectivo}`
+    });
+
+    console.log('💰 TOTALES FINALES:', {
+      SaldoEsperado: saldoEsperado,
+      TotalEfectivo: totalEfectivo,
+      TotalTransferencia: totalTransferencia,
+      TotalPagoConTarjeta: totalPagoConTarjeta,
+    });
 
     const pagosNoValidados = pagosPoliza.filter(
       (pago) => pago.MetodoPago.IDMetodoPago !== 3 && !pago.Validado,

@@ -176,7 +176,7 @@ export class PagosPolizaService {
 
     // VALIDACIÓN NUEVA: Si el tipo de pago es diferente de efectivo (3)
     if (IDMetodoPago !== 3) {
-      if (!Validado) {
+     /* if (!Validado) {
         throw new HttpException(
           'El campo Validado es obligatorio para este método de pago',
           HttpStatus.BAD_REQUEST,
@@ -187,7 +187,7 @@ export class PagosPolizaService {
           'El campo UsuarioValidoID es obligatorio para este método de pago',
           HttpStatus.BAD_REQUEST,
         );
-      }
+      }*/
       if (!CuentaBancariaID) {
         throw new HttpException(
           'El campo CuentaBancariaID es obligatorio para este método de pago',
