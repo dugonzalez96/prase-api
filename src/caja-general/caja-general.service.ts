@@ -85,37 +85,36 @@ export class CajaGeneralService {
     }
 
     // DASHBOARD COMPLETO (incluye pre-cuadre)
-    async getDashboard(
-        dto: GetCajaGeneralDashboardDto,
-    ): Promise<CajaGeneralDashboardResponseDto> {
+    async getDashboard(dto: GetCajaGeneralDashboardDto) {
         const { fecha, sucursalId } = dto;
 
-        // ⬇️ Cambiamos a rango LOCAL→UTC
-        const { startUTC: start, endUTC: end } = this.getLocalDayRangeToUTC(fecha);
+        console.log('🔍 Consultando dashboard para fecha:', fecha);
 
-        // 1) Saldo inicial: último cuadre CERRADO antes de la fecha (con o sin sucursal)
-        const ultimoCuadre = await this.cajaGeneralRepo.findOne({
-            where: {
-                Fecha: LessThanOrEqual(start),
-                Estatus: 'Cerrado',
-                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
-            },
-            relations: ['Sucursal', 'UsuarioCuadre'],
-            order: { Fecha: 'DESC' },
-        });
+        // 1) Saldo inicial: último cuadre CERRADO antes de la fecha
+        const ultimoCuadre = await this.cajaGeneralRepo
+            .createQueryBuilder('cg')
+            .leftJoinAndSelect('cg.Sucursal', 'sucursal')
+            .leftJoinAndSelect('cg.UsuarioCuadre', 'usuario')
+            .where('DATE(cg.Fecha) < :fecha', { fecha })
+            .andWhere('cg.Estatus = :estatus', { estatus: 'Cerrado' })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .orderBy('cg.Fecha', 'DESC')
+            .getOne();
 
         const saldoInicial = ultimoCuadre?.SaldoFinal || 0;
 
         // 2.1 Cajas chicas cerradas
-        const cajasChica = await this.cajaChicaRepo.find({
-            where: {
-                FechaCierre: Between(start, end),
-                Estatus: 'Cerrado',
-                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
-            },
-            relations: ['Sucursal', 'UsuarioCuadre'],
-            order: { FechaCierre: 'ASC' },
-        });
+        const cajasChica = await this.cajaChicaRepo
+            .createQueryBuilder('cc')
+            .leftJoinAndSelect('cc.Sucursal', 'sucursal')
+            .leftJoinAndSelect('cc.UsuarioCuadre', 'usuario')
+            .where('DATE(cc.FechaCierre) = :fecha', { fecha }) // ← Solo compara fecha
+            .andWhere('cc.Estatus = :estatus', { estatus: 'Cerrado' })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .orderBy('cc.FechaCierre', 'ASC')
+            .getMany();
+
+        console.log('📊 Cajas chicas encontradas:', cajasChica.length);
 
         const entradasTimeline: MovimientoTimelineDto[] = [];
         const entradasCortesCajaChica: MovimientoTimelineDto[] = [];
@@ -148,13 +147,14 @@ export class CajaGeneralService {
         });
 
         // 2.2 Pagos póliza
-        const pagos = await this.pagosPolizaRepo.find({
-            where: {
-                FechaPago: Between(start, end),
-            },
-            relations: ['Usuario'],
-            order: { FechaPago: 'ASC' },
-        });
+        const pagos = await this.pagosPolizaRepo
+            .createQueryBuilder('p')
+            .leftJoinAndSelect('p.Usuario', 'usuario')
+            .where('DATE(p.FechaPago) = :fecha', { fecha })
+            .orderBy('p.FechaPago', 'ASC')
+            .getMany();
+
+        console.log('📊 Pagos póliza encontrados:', pagos.length);
 
         pagos.forEach((pago) => {
             const mov: MovimientoTimelineDto = {
@@ -172,15 +172,16 @@ export class CajaGeneralService {
         });
 
         // 2.3 Transacciones ingreso general
-        const transIngresos = await this.transaccionesRepo.find({
-            where: {
-                FechaTransaccion: Between(start, end),
-                TipoTransaccion: 'Ingreso',
-                EsGeneral: true,
-            },
-            relations: ['CuentaBancaria'],
-            order: { FechaTransaccion: 'ASC' },
-        });
+        const transIngresos = await this.transaccionesRepo
+            .createQueryBuilder('t')
+            .leftJoinAndSelect('t.CuentaBancaria', 'cuenta')
+            .where('DATE(t.FechaTransaccion) = :fecha', { fecha })
+            .andWhere('t.TipoTransaccion = :tipo', { tipo: 'Ingreso' })
+            .andWhere('t.EsGeneral = :esGeneral', { esGeneral: true })
+            .orderBy('t.FechaTransaccion', 'ASC')
+            .getMany();
+
+        console.log('📊 Transacciones ingreso encontradas:', transIngresos.length);
 
         transIngresos.forEach((t) => {
             const mov: MovimientoTimelineDto = {
@@ -205,15 +206,16 @@ export class CajaGeneralService {
         const egresosTimeline: MovimientoTimelineDto[] = [];
         const egresosTransacciones: MovimientoTimelineDto[] = [];
 
-        const transEgresos = await this.transaccionesRepo.find({
-            where: {
-                FechaTransaccion: Between(start, end),
-                TipoTransaccion: 'Egreso',
-                EsGeneral: true,
-            },
-            relations: ['CuentaBancaria'],
-            order: { FechaTransaccion: 'ASC' },
-        });
+        const transEgresos = await this.transaccionesRepo
+            .createQueryBuilder('t')
+            .leftJoinAndSelect('t.CuentaBancaria', 'cuenta')
+            .where('DATE(t.FechaTransaccion) = :fecha', { fecha })
+            .andWhere('t.TipoTransaccion = :tipo', { tipo: 'Egreso' })
+            .andWhere('t.EsGeneral = :esGeneral', { esGeneral: true })
+            .orderBy('t.FechaTransaccion', 'ASC')
+            .getMany();
+
+        console.log('📊 Transacciones egreso encontradas:', transEgresos.length);
 
         transEgresos.forEach((t) => {
             const mov: MovimientoTimelineDto = {
@@ -237,16 +239,15 @@ export class CajaGeneralService {
         const saldoCalculado = saldoInicial + totalEntradas - totalEgresos;
         const diferencia = 0;
 
-        let estadoCuadre: 'PRE_CUADRE' | 'CUADRADO' | 'CON_DIFERENCIA' =
-            'PRE_CUADRE';
+        let estadoCuadre: 'PRE_CUADRE' | 'CUADRADO' | 'CON_DIFERENCIA' = 'PRE_CUADRE';
 
-        const cuadreDelDia = await this.cajaGeneralRepo.findOne({
-            where: {
-                Fecha: Between(start, end),
-                Estatus: 'Cerrado',
-                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
-            },
-        });
+        const cuadreDelDia = await this.cajaGeneralRepo
+            .createQueryBuilder('cg')
+            .leftJoinAndSelect('cg.Sucursal', 'sucursal')
+            .where('DATE(cg.Fecha) = :fecha', { fecha })
+            .andWhere('cg.Estatus = :estatus', { estatus: 'Cerrado' })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .getOne();
 
         if (cuadreDelDia) {
             estadoCuadre = 'CUADRADO';
@@ -264,14 +265,16 @@ export class CajaGeneralService {
         };
 
         // 5) CortesUsuarios
-        const cortesUsuariosRaw = await this.cortesUsuariosRepo.find({
-            where: {
-                FechaCorte: Between(start, end),
-                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
-            },
-            relations: ['Sucursal', 'usuarioID'],
-            order: { FechaCorte: 'DESC' },
-        });
+        const cortesUsuariosRaw = await this.cortesUsuariosRepo
+            .createQueryBuilder('c')
+            .leftJoinAndSelect('c.Sucursal', 'sucursal')
+            .leftJoinAndSelect('c.usuarioID', 'usuario')
+            .where('DATE(c.FechaCorte) = :fecha', { fecha })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .orderBy('c.FechaCorte', 'DESC')
+            .getMany();
+
+        console.log('📊 Cortes usuarios encontrados:', cortesUsuariosRaw.length);
 
         const cortesUsuarios = cortesUsuariosRaw.map((c) => ({
             usuario: c.usuarioID?.NombreUsuario || '',
@@ -285,14 +288,16 @@ export class CajaGeneralService {
         }));
 
         // 6) Inicios
-        const inicios = await this.iniciosCajaRepo.find({
-            where: {
-                FechaInicio: Between(start, end),
-                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
-            },
-            relations: ['Sucursal', 'Usuario'],
-            order: { FechaInicio: 'ASC' },
-        });
+        const inicios = await this.iniciosCajaRepo
+            .createQueryBuilder('i')
+            .leftJoinAndSelect('i.Sucursal', 'sucursal')
+            .leftJoinAndSelect('i.Usuario', 'usuario')
+            .where('DATE(i.FechaInicio) = :fecha', { fecha })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .orderBy('i.FechaInicio', 'ASC')
+            .getMany();
+
+        console.log('📊 Inicios encontrados:', inicios.length);
 
         const iniciosUsuarios = inicios.map((i) => ({
             usuario: i.Usuario?.NombreUsuario || '',
@@ -312,7 +317,7 @@ export class CajaGeneralService {
             diferencia,
         };
 
-        // 8) Historial cuadres (aquí no filtras por fecha: ok, no toca tz)
+        // 8) Historial cuadres
         const historialRegistros = await this.cajaGeneralRepo.find({
             relations: ['Sucursal', 'UsuarioCuadre'],
             order: { Fecha: 'DESC' },
@@ -332,6 +337,8 @@ export class CajaGeneralService {
                 usuarioCuadre: cg.UsuarioCuadre?.NombreUsuario || null,
                 estatus: cg.Estatus,
             }));
+
+        console.log('✅ Dashboard generado exitosamente');
 
         const respuesta: CajaGeneralDashboardResponseDto = {
             filtros: { fecha, sucursalId },
