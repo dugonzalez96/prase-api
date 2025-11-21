@@ -19,4 +19,7 @@ export class Sucursal {
 
   @Column({ type: 'tinyint', default: 1 })
   Activa: boolean;
+
+  @Column({ length: 100, nullable: true, collation: 'utf8mb4_0900_ai_ci' })
+  Timezone: string;
 }

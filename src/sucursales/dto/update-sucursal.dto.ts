@@ -4,5 +4,6 @@ export class UpdateSucursalDto {
     Ciudad?: string;
     Estado?: string;
     Activa?: boolean;
+    Timezone?: string;
   }
   

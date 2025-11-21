@@ -59,43 +59,55 @@ export class CajaGeneralService {
         private readonly iniciosCajaRepo: Repository<IniciosCaja>,
     ) { }
 
-    private getDayRange(fecha: string) {
-        if (!fecha) {
-            throw new HttpException(
-                'La fecha es obligatoria',
-                HttpStatus.BAD_REQUEST,
-            );
+    // 🌍 MÉTODO AUXILIAR: Obtener timezone de la sucursal
+    private async getTimezoneForSucursal(sucursalId?: number): Promise<string> {
+        if (!sucursalId) {
+            // Default para Nayarit (Tepic - Zona Montaña)
+            return '-07:00';
         }
-        const start = new Date(`${fecha}T00:00:00`);
-        const end = new Date(`${fecha}T23:59:59`);
-        return { start, end };
+
+        const sucursal = await this.sucursalRepo.findOne({
+            where: { SucursalID: sucursalId },
+            select: ['SucursalID', 'Timezone']
+        });
+
+        if (!sucursal?.Timezone) {
+            console.warn(`⚠️ Sucursal ${sucursalId} sin timezone configurado, usando default -07:00`);
+            return '-07:00';
+        }
+
+        // Mapeo de timezones
+        const timezoneMap: Record<string, string> = {
+            'America/Mazatlan': '-07:00',        // Tepic, Compostela (Zona Montaña)
+            'America/Mexico_City': '-06:00',     // Bahía de Banderas (Zona Centro)
+            'America/Hermosillo': '-07:00',      // Sonora (sin DST)
+            'America/Chihuahua': '-06:00',       // Chihuahua
+            'America/Tijuana': '-08:00',         // Baja California
+        };
+
+        const offset = timezoneMap[sucursal.Timezone] || '-07:00';
+
+        console.log(`🌍 Timezone para sucursal ${sucursalId}: ${sucursal.Timezone} → ${offset}`);
+
+        return offset;
     }
 
-    private parseDateOrToday(fecha?: string): { start: Date; end: Date } {
-        if (!fecha) {
-            const hoy = new Date();
-            const yyyy = hoy.getFullYear();
-            const mm = String(hoy.getMonth() + 1).padStart(2, '0');
-            const dd = String(hoy.getDate()).padStart(2, '0');
-            fecha = `${yyyy}-${mm}-${dd}`;
-        }
-        const start = new Date(`${fecha}T00:00:00`);
-        const end = new Date(`${fecha}T23:59:59`);
-        return { start, end };
-    }
-
-    // DASHBOARD COMPLETO (incluye pre-cuadre)
+    // 📊 DASHBOARD COMPLETO (incluye pre-cuadre)
     async getDashboard(dto: GetCajaGeneralDashboardDto) {
         const { fecha, sucursalId } = dto;
 
         console.log('🔍 Consultando dashboard para fecha:', fecha);
+
+        // 🌍 Obtener timezone de la sucursal
+        const timezone = await this.getTimezoneForSucursal(sucursalId);
+        console.log(`🌍 Usando timezone: ${timezone} para consultas`);
 
         // 1) Saldo inicial: último cuadre CERRADO antes de la fecha
         const ultimoCuadre = await this.cajaGeneralRepo
             .createQueryBuilder('cg')
             .leftJoinAndSelect('cg.Sucursal', 'sucursal')
             .leftJoinAndSelect('cg.UsuarioCuadre', 'usuario')
-            .where('DATE(cg.Fecha) < :fecha', { fecha })
+            .where("DATE(CONVERT_TZ(cg.Fecha, '+00:00', :timezone)) < :fecha", { fecha, timezone })
             .andWhere('cg.Estatus = :estatus', { estatus: 'Cerrado' })
             .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
             .orderBy('cg.Fecha', 'DESC')
@@ -108,7 +120,7 @@ export class CajaGeneralService {
             .createQueryBuilder('cc')
             .leftJoinAndSelect('cc.Sucursal', 'sucursal')
             .leftJoinAndSelect('cc.UsuarioCuadre', 'usuario')
-            .where('DATE(cc.FechaCierre) = :fecha', { fecha }) // ← Solo compara fecha
+            .where("DATE(CONVERT_TZ(cc.FechaCierre, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere('cc.Estatus = :estatus', { estatus: 'Cerrado' })
             .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
             .orderBy('cc.FechaCierre', 'ASC')
@@ -150,7 +162,7 @@ export class CajaGeneralService {
         const pagos = await this.pagosPolizaRepo
             .createQueryBuilder('p')
             .leftJoinAndSelect('p.Usuario', 'usuario')
-            .where('DATE(p.FechaPago) = :fecha', { fecha })
+            .where("DATE(CONVERT_TZ(p.FechaPago, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .orderBy('p.FechaPago', 'ASC')
             .getMany();
 
@@ -175,7 +187,7 @@ export class CajaGeneralService {
         const transIngresos = await this.transaccionesRepo
             .createQueryBuilder('t')
             .leftJoinAndSelect('t.CuentaBancaria', 'cuenta')
-            .where('DATE(t.FechaTransaccion) = :fecha', { fecha })
+            .where("DATE(CONVERT_TZ(t.FechaTransaccion, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere('t.TipoTransaccion = :tipo', { tipo: 'Ingreso' })
             .andWhere('t.EsGeneral = :esGeneral', { esGeneral: true })
             .orderBy('t.FechaTransaccion', 'ASC')
@@ -209,7 +221,7 @@ export class CajaGeneralService {
         const transEgresos = await this.transaccionesRepo
             .createQueryBuilder('t')
             .leftJoinAndSelect('t.CuentaBancaria', 'cuenta')
-            .where('DATE(t.FechaTransaccion) = :fecha', { fecha })
+            .where("DATE(CONVERT_TZ(t.FechaTransaccion, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere('t.TipoTransaccion = :tipo', { tipo: 'Egreso' })
             .andWhere('t.EsGeneral = :esGeneral', { esGeneral: true })
             .orderBy('t.FechaTransaccion', 'ASC')
@@ -244,7 +256,7 @@ export class CajaGeneralService {
         const cuadreDelDia = await this.cajaGeneralRepo
             .createQueryBuilder('cg')
             .leftJoinAndSelect('cg.Sucursal', 'sucursal')
-            .where('DATE(cg.Fecha) = :fecha', { fecha })
+            .where("DATE(CONVERT_TZ(cg.Fecha, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere('cg.Estatus = :estatus', { estatus: 'Cerrado' })
             .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
             .getOne();
@@ -269,7 +281,7 @@ export class CajaGeneralService {
             .createQueryBuilder('c')
             .leftJoinAndSelect('c.Sucursal', 'sucursal')
             .leftJoinAndSelect('c.usuarioID', 'usuario')
-            .where('DATE(c.FechaCorte) = :fecha', { fecha })
+            .where("DATE(CONVERT_TZ(c.FechaCorte, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
             .orderBy('c.FechaCorte', 'DESC')
             .getMany();
@@ -292,7 +304,7 @@ export class CajaGeneralService {
             .createQueryBuilder('i')
             .leftJoinAndSelect('i.Sucursal', 'sucursal')
             .leftJoinAndSelect('i.Usuario', 'usuario')
-            .where('DATE(i.FechaInicio) = :fecha', { fecha })
+            .where("DATE(CONVERT_TZ(i.FechaInicio, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
             .orderBy('i.FechaInicio', 'ASC')
             .getMany();
@@ -362,9 +374,7 @@ export class CajaGeneralService {
         return respuesta;
     }
 
-
-    // SERVICIO SEPARADO PARA PRE-CUADRE (lo que enseñas en el panel previo al cierre)
-    // SERVICIO SEPARADO PARA PRE-CUADRE (lo que enseñas en el panel previo al cierre)
+    // 📊 SERVICIO SEPARADO PARA PRE-CUADRE
     async getPreCuadre(
         dto: GetCajaGeneralDashboardDto,
     ): Promise<{
@@ -401,21 +411,41 @@ export class CajaGeneralService {
     }> {
         const { fecha, sucursalId } = dto;
 
-        // ⬇️ Rango LOCAL→UTC para revisiones de "hoy"
-        const { startUTC: start, endUTC: end } = this.getLocalDayRangeToUTC(fecha);
+        console.log('🔍 Consultando pre-cuadre para fecha:', fecha);
+
+        // 🌍 Obtener timezone de la sucursal
+        const timezone = await this.getTimezoneForSucursal(sucursalId);
+        console.log(`🌍 Usando timezone: ${timezone} para pre-cuadre`);
+
+        // Convertir fecha a rango UTC usando el timezone de la sucursal
+        const [year, month, day] = fecha.split('-').map(Number);
+        const startLocal = new Date(year, month - 1, day, 0, 0, 0, 0);
+        const endLocal = new Date(year, month - 1, day, 23, 59, 59, 999);
+
+        // Ajustar según el timezone
+        const timezoneOffsetMinutes = parseInt(timezone.split(':')[0]) * 60;
+        const start = new Date(startLocal.getTime() - timezoneOffsetMinutes * 60000);
+        const end = new Date(endLocal.getTime() - timezoneOffsetMinutes * 60000);
+
+        console.log('📅 Rango local interpretado:', {
+            inicio: startLocal.toString(),
+            fin: endLocal.toString(),
+            inicioUTC: start.toISOString(),
+            finUTC: end.toISOString(),
+        });
 
         // Foto del día (esto ya trae preCuadre armado con 0 si no hay nada)
         const dashboard = await this.getDashboard({ fecha, sucursalId });
 
         // 1) ¿Ya existe cuadre de hoy?
-        const cuadreHoy = await this.cajaGeneralRepo.findOne({
-            where: {
-                Fecha: Between(start, end),
-                Estatus: 'Cerrado',
-                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
-            },
-            relations: ['Sucursal', 'UsuarioCuadre'],
-        });
+        const cuadreHoy = await this.cajaGeneralRepo
+            .createQueryBuilder('cg')
+            .leftJoinAndSelect('cg.Sucursal', 'sucursal')
+            .leftJoinAndSelect('cg.UsuarioCuadre', 'usuario')
+            .where("DATE(CONVERT_TZ(cg.Fecha, '+00:00', :timezone)) = :fecha", { fecha, timezone })
+            .andWhere('cg.Estatus = :estatus', { estatus: 'Cerrado' })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .getOne();
 
         const yaCuadradoHoy = !!cuadreHoy;
 
@@ -430,15 +460,15 @@ export class CajaGeneralService {
         }
 
         // 2) Analítica vs cuadres anteriores
-        const historico = await this.cajaGeneralRepo.find({
-            where: {
-                Fecha: LessThanOrEqual(start),
-                Estatus: 'Cerrado',
-                ...(sucursalId ? { Sucursal: { SucursalID: sucursalId } } : {}),
-            },
-            order: { Fecha: 'DESC' },
-            take: 7,
-        });
+        const historico = await this.cajaGeneralRepo
+            .createQueryBuilder('cg')
+            .leftJoinAndSelect('cg.Sucursal', 'sucursal')
+            .where("DATE(CONVERT_TZ(cg.Fecha, '+00:00', :timezone)) < :fecha", { fecha, timezone })
+            .andWhere('cg.Estatus = :estatus', { estatus: 'Cerrado' })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .orderBy('cg.Fecha', 'DESC')
+            .take(7)
+            .getMany();
 
         const ultimoCuadre = historico.length > 0 ? historico[0] : null;
         const diasConsiderados = historico.length;
@@ -504,6 +534,8 @@ export class CajaGeneralService {
             variacionVsPromedio,
         };
 
+        console.log('✅ Pre-cuadre generado exitosamente');
+
         // ⚠️ Aquí es donde garantizamos estructura y defaults:
         return {
             filtros: {
@@ -534,8 +566,6 @@ export class CajaGeneralService {
             motivosBloqueo,
         };
     }
-
-
 
     // CUADRAR CAJA GENERAL
     async cuadrarCajaGeneral(dto: CuadrarCajaGeneralDto): Promise<CajaGeneral> {
@@ -722,19 +752,28 @@ export class CajaGeneralService {
         });
     }
 
-    private getLocalDayRangeToUTC(fecha: string) {
-        const base = fecha ? new Date(fecha) : new Date();
+    private getLocalDayRangeToUTC(fecha: string, timezone: string = 'America/Mexico_City') {
+        // Parsear fecha como LOCAL (sin zona horaria)
+        const [year, month, day] = fecha.split('-').map(Number);
 
-        // FECHA LOCAL INICIO / FIN
-        const startLocal = new Date(base);
-        startLocal.setHours(0, 0, 0, 0);
+        // Crear fecha en hora local (ignorando UTC)
+        const startLocal = new Date(year, month - 1, day, 0, 0, 0, 0);
+        const endLocal = new Date(year, month - 1, day, 23, 59, 59, 999);
 
-        const endLocal = new Date(base);
-        endLocal.setHours(23, 59, 59, 999);
+        console.log('📅 Fecha local interpretada:', {
+            inicio: startLocal.toString(), // Thu Nov 20 2025 00:00:00 GMT-0600
+            fin: endLocal.toString(),       // Thu Nov 20 2025 23:59:59 GMT-0600
+        });
 
-        // CONVERTIR A UTC RESTANDO OFFSET
-        const startUTC = new Date(startLocal.getTime() - startLocal.getTimezoneOffset() * 60000);
-        const endUTC = new Date(endLocal.getTime() - endLocal.getTimezoneOffset() * 60000);
+        // Estas fechas YA están en hora local del servidor
+        // Al guardarlas en BD se convertirán automáticamente a UTC
+        const startUTC = startLocal;
+        const endUTC = endLocal;
+
+        console.log('🌍 Rango UTC para búsqueda:', {
+            inicio: startUTC.toISOString(), // 2025-11-20T06:00:00.000Z (en México UTC-6)
+            fin: endUTC.toISOString(),       // 2025-11-21T05:59:59.999Z (en México UTC-6)
+        });
 
         return { startUTC, endUTC };
     }
