@@ -359,12 +359,6 @@ export class PagosPolizaService {
         );
       }
 
-      if (!updateDto.CuentaBancariaID) {
-        throw new HttpException(
-          'El campo "CuentaBancariaID" es obligatorio para métodos de pago distintos de efectivo',
-          HttpStatus.BAD_REQUEST,
-        );
-      }
     }
 
     const estatusPago = updateDto.IDEstatusPago
