@@ -18,13 +18,13 @@ export class CajaChicaController {
 
 
     // Cuadrar caja chica (usa el usuario autenticado; fallback a 1)
-    @Post('cuadrar/:sucursalId')
+    @Post('cuadrar/:usuarioID/:sucursalId')  // 👈 Usuario primero, sucursal después
     cuadrar(
+        @Param('usuarioID', ParseIntPipe) usuarioID: number,
         @Param('sucursalId', ParseIntPipe) sucursalId: number,
         @Req() req,
         @Body() dto: CreateCajaChicaDto,
     ) {
-        const usuarioID = req.user.UsuarioID;
         return this.cajaChicaService.cuadrarCajaChica(usuarioID, sucursalId, dto);
     }
 
