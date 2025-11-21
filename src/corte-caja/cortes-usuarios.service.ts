@@ -1007,19 +1007,31 @@ export class CortesUsuariosService {
       );
     }
 
+    // ✅ VALIDACIÓN 1: Montos capturados no pueden ser negativos
+    if (
+      totalEfectivoCapturado < 0 ||
+      totalTarjetaCapturado < 0 ||
+      totalTransferenciaCapturado < 0
+    ) {
+      throw new HttpException(
+        'Los montos capturados no pueden ser negativos',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0); // Inicio del día
+    hoy.setHours(0, 0, 0, 0);
 
     const mañana = new Date();
-    mañana.setHours(23, 59, 59, 999); // Fin del día
+    mañana.setHours(23, 59, 59, 999);
 
     const corteExistente = await this.cortesUsuariosRepository.findOne({
       where: {
-        usuarioID: { UsuarioID: usuarioID }, // Relación con usuarios
+        usuarioID: { UsuarioID: usuarioID },
         FechaCorte: Between(hoy, mañana),
         Estatus: Not('Cerrado'),
       },
-      relations: ['usuarioID'], // Asegurar que se incluya la relación con Usuario
+      relations: ['usuarioID'],
     });
 
     console.log(corteExistente);
@@ -1034,12 +1046,49 @@ export class CortesUsuariosService {
     // **Primero generamos el corte de caja automático (NO se toca la lógica)**
     const corteCalculado = await this.generarCorteCaja(usuarioID);
 
+    // ✅ VALIDACIÓN 2: Efectivo esperado negativo (CRÍTICO)
+    if (corteCalculado.TotalEfectivo < 0) {
+      throw new HttpException(
+        `❌ No se puede cerrar el corte: el efectivo esperado es negativo ($${corteCalculado.TotalEfectivo.toFixed(2)}). ` +
+        `Los egresos en efectivo ($${corteCalculado.TotalEgresosEfectivo.toFixed(2)}) superan el efectivo disponible. ` +
+        `Verifica los movimientos antes de cerrar.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // ✅ VALIDACIÓN 3: Monto capturado vs esperado (con tolerancia)
+    const tolerancia = 0.01; // 1% de tolerancia
+
+    if (totalEfectivoCapturado > corteCalculado.TotalEfectivo * (1 + tolerancia) && corteCalculado.TotalEfectivo >= 0) {
+      throw new HttpException(
+        `⚠️ El efectivo capturado ($${totalEfectivoCapturado.toFixed(2)}) excede significativamente el esperado ($${corteCalculado.TotalEfectivo.toFixed(2)}). ` +
+        `Verifica el monto ingresado.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (totalTarjetaCapturado > corteCalculado.TotalPagoConTarjeta * (1 + tolerancia) && corteCalculado.TotalPagoConTarjeta > 0) {
+      throw new HttpException(
+        `⚠️ El monto de tarjeta capturado ($${totalTarjetaCapturado.toFixed(2)}) excede el esperado ($${corteCalculado.TotalPagoConTarjeta.toFixed(2)}). ` +
+        `Verifica el monto ingresado.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (totalTransferenciaCapturado > corteCalculado.TotalTransferencia * (1 + tolerancia) && corteCalculado.TotalTransferencia > 0) {
+      throw new HttpException(
+        `⚠️ Las transferencias capturadas ($${totalTransferenciaCapturado.toFixed(2)}) exceden las esperadas ($${corteCalculado.TotalTransferencia.toFixed(2)}). ` +
+        `Verifica el monto ingresado.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     // **Obtener el inicio de caja activo del usuario**
     const inicioCaja = await this.iniciosCajaRepository.findOne({
       where: {
         Usuario: { UsuarioID: usuarioID },
         Estatus: 'Activo',
-        FechaInicio: Between(hoy, new Date(hoy.getTime() + 86400000)), // Validar que sea del día actual
+        FechaInicio: Between(hoy, new Date(hoy.getTime() + 86400000)),
       },
     });
 
@@ -1053,7 +1102,7 @@ export class CortesUsuariosService {
     const transaccionesSinCaja = await this.transaccionesRepository.find({
       where: {
         UsuarioCreo: { UsuarioID: usuarioID },
-        InicioCaja: IsNull(), // Asegura que InicioCaja sea NULL
+        InicioCaja: IsNull(),
       },
     });
 
@@ -1072,6 +1121,40 @@ export class CortesUsuariosService {
 
     // **Calculamos la diferencia entre el saldo esperado y el saldo real**
     const diferencia = saldoReal - corteCalculado.SaldoEsperado;
+
+    // ✅ VALIDACIÓN 4: Advertencia de diferencia significativa
+    if (Math.abs(diferencia) > 0 && corteCalculado.SaldoEsperado !== 0) {
+      const porcentajeDiferencia = (Math.abs(diferencia) / Math.abs(corteCalculado.SaldoEsperado)) * 100;
+
+      if (porcentajeDiferencia > 10) { // Si la diferencia es mayor al 10%
+        console.warn(
+          `⚠️ ADVERTENCIA CRÍTICA: Diferencia del ${porcentajeDiferencia.toFixed(2)}% detectada. ` +
+          `Esperado: $${corteCalculado.SaldoEsperado.toFixed(2)}, Real: $${saldoReal.toFixed(2)}, ` +
+          `Diferencia: $${diferencia.toFixed(2)}`
+        );
+
+        // Opcional: Requerir observaciones obligatorias en diferencias grandes
+        if (!observaciones || observaciones.trim().length < 10) {
+          throw new HttpException(
+            `⚠️ Se requiere una observación detallada (mínimo 10 caracteres) cuando la diferencia supera el 10%. ` +
+            `Diferencia actual: $${diferencia.toFixed(2)} (${porcentajeDiferencia.toFixed(2)}%)`,
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+      }
+    }
+
+    // ✅ VALIDACIÓN 5: Saldo real debe coincidir con suma de capturados
+    const sumaCapturados = totalEfectivoCapturado + totalTarjetaCapturado + totalTransferenciaCapturado;
+    const diferenciaCaptura = Math.abs(saldoReal - sumaCapturados);
+
+    if (diferenciaCaptura > 0.01) { // Tolerancia de 1 centavo por redondeo
+      throw new HttpException(
+        `❌ Inconsistencia: El saldo real ($${saldoReal.toFixed(2)}) no coincide con la suma de montos capturados ($${sumaCapturados.toFixed(2)}). ` +
+        `Diferencia: $${diferenciaCaptura.toFixed(2)}`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
     const usuario = await this.usersRepository.findOne({
       where: { UsuarioID: usuarioID },
@@ -1093,11 +1176,33 @@ export class CortesUsuariosService {
       );
     }
 
+    // ✅ VALIDACIÓN 6: Verificar que no haya transacciones no validadas
+    const transaccionesNoValidadas = await this.transaccionesRepository
+      .createQueryBuilder('t')
+      .leftJoin('t.UsuarioCreo', 'u')
+      .where('u.UsuarioID = :usuarioID', { usuarioID })
+      .andWhere('DATE(t.FechaTransaccion) >= :fechaInicio', {
+        fechaInicio: hoy.toISOString().split('T')[0]
+      })
+      .andWhere('t.FormaPago IN (:...formasPago)', {
+        formasPago: ['Transferencia', 'Deposito', 'Tarjeta']
+      })
+      .andWhere('t.Validado = :validado', { validado: false })
+      .getCount();
+
+    if (transaccionesNoValidadas > 0) {
+      throw new HttpException(
+        `❌ No se puede cerrar el corte: existen ${transaccionesNoValidadas} transacción(es) no validadas. ` +
+        `Todas las transacciones electrónicas deben estar validadas antes de cerrar.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     // **Guardar el corte en la base de datos**
     const nuevoCorte = this.cortesUsuariosRepository.create({
       InicioCaja: inicioCaja,
       usuarioID: usuario,
-      Sucursal: sucursal, // 👈 ahora sí amarramos sucursal al corte
+      Sucursal: sucursal,
       FechaCorte: new Date(),
       TotalIngresos: corteCalculado.TotalIngresos,
       TotalIngresosEfectivo: corteCalculado.TotalIngresosEfectivo,
@@ -1126,9 +1231,7 @@ export class CortesUsuariosService {
     inicioCaja.Estatus = 'Cerrado';
     await this.iniciosCajaRepository.save(inicioCaja);
 
-    // 🔗 NUEVO: Amarrar Transacciones y PagosPoliza a este corte
-    // Usamos mismo usuario y rango del día actual (hoy..mañana),
-    // respetando la lógica que ya usas para el corte.
+    // 🔗 Amarrar Transacciones y PagosPoliza a este corte
     const transaccionesDelCorte = await this.transaccionesRepository.find({
       where: {
         UsuarioCreo: { UsuarioID: usuarioID },
