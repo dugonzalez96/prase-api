@@ -381,6 +381,37 @@ export class CajaChicaService {
             );
         }
 
+        // ✅ VALIDACIÓN 1: Montos capturados no negativos
+        const { SaldoReal, TotalEfectivoCapturado, TotalTarjetaCapturado, TotalTransferenciaCapturado } = dto;
+
+        if (
+            TotalEfectivoCapturado < 0 ||
+            TotalTarjetaCapturado < 0 ||
+            TotalTransferenciaCapturado < 0 ||
+            SaldoReal < 0
+        ) {
+            throw new HttpException(
+                '❌ Los montos capturados no pueden ser negativos',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        // ✅ VALIDACIÓN 2: SaldoReal debe coincidir con suma de capturados
+        const sumaCapturados = Number(TotalEfectivoCapturado ?? 0) +
+            Number(TotalTarjetaCapturado ?? 0) +
+            Number(TotalTransferenciaCapturado ?? 0);
+
+        const diferenciaCaptura = Math.abs(Number(SaldoReal ?? 0) - sumaCapturados);
+
+        if (diferenciaCaptura > 0.01) {
+            throw new HttpException(
+                `❌ Inconsistencia: El saldo real ($${Number(SaldoReal).toFixed(2)}) no coincide ` +
+                `con la suma de montos capturados ($${sumaCapturados.toFixed(2)}). ` +
+                `Diferencia: $${diferenciaCaptura.toFixed(2)}`,
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
         // ventana desde último cuadre DE ESA SUCURSAL
         const { desde, finDia } = await this.ventanaDesdeUltimoCuadre(sucursalId);
 
@@ -395,12 +426,12 @@ export class CajaChicaService {
 
         if (hayPendientes > 0) {
             throw new HttpException(
-                `No se puede cuadrar: existen ${hayPendientes} corte(s) de usuario con estatus PENDIENTE en la sucursal ${sucursalId}.`,
+                `❌ No se puede cuadrar: existen ${hayPendientes} corte(s) de usuario con estatus PENDIENTE en la sucursal ${sucursalId}.`,
                 HttpStatus.BAD_REQUEST,
             );
         }
 
-        // (B) BLOQUEO por “usuarios con movimientos” sin corte CERRADO (solo sucursal)
+        // (B) BLOQUEO por "usuarios con movimientos" sin corte CERRADO (solo sucursal)
         const usuariosMovSinCorte = await this.getUsuariosConMovimientosSinCorte(
             desde,
             finDia,
@@ -412,7 +443,7 @@ export class CajaChicaService {
                 .map((u) => `${u.UsuarioID}-${u.Nombre}`)
                 .join(', ');
             throw new HttpException(
-                `No se puede cuadrar: usuarios con movimientos sin corte CERRADO en la sucursal ${sucursalId}: ${lista}.`,
+                `❌ No se puede cuadrar: usuarios con movimientos sin corte CERRADO en la sucursal ${sucursalId}: ${lista}.`,
                 HttpStatus.BAD_REQUEST,
             );
         }
@@ -430,7 +461,7 @@ export class CajaChicaService {
 
         if (cuadreExistente) {
             throw new HttpException(
-                `Ya existe un cuadre de caja chica con estatus '${cuadreExistente.Estatus}' para el día de hoy en la sucursal ${sucursalId}.`,
+                `❌ Ya existe un cuadre de caja chica con estatus '${cuadreExistente.Estatus}' para el día de hoy en la sucursal ${sucursalId}.`,
                 HttpStatus.BAD_REQUEST,
             );
         }
@@ -442,11 +473,12 @@ export class CajaChicaService {
                 Estatus: 'Cerrado',
                 Sucursal: { SucursalID: sucursalId },
             },
+            relations: ['usuarioID'],
         });
 
         if (cortesCerrados.length === 0) {
             throw new HttpException(
-                'No hay cortes de usuario CERRADOS en la ventana para esta sucursal. No es posible realizar el cuadre.',
+                '❌ No hay cortes de usuario CERRADOS en la ventana para esta sucursal. No es posible realizar el cuadre.',
                 HttpStatus.BAD_REQUEST,
             );
         }
@@ -475,7 +507,8 @@ export class CajaChicaService {
         // FondoInicial vigente SOLO de inicios de esa sucursal
         const iniciosActivosRaw = await this.iniciosCajaRepository.find({
             where: { Estatus: In(['Activo', 'Pendiente']) },
-            relations: ['Usuario'],
+            relations: ['Usuario', 'UsuarioAutorizo'],
+            order: { FechaInicio: 'DESC' },
         });
 
         const iniciosActivos = iniciosActivosRaw.filter(
@@ -488,53 +521,114 @@ export class CajaChicaService {
         );
 
         // Saldo esperado con fondo
-        const SaldoEsperado =
-            Number(FondoInicial) + (TotalIngresos - TotalEgresos);
+        const SaldoEsperado = Number(FondoInicial) + (TotalIngresos - TotalEgresos);
 
         // Capturables del dto
-        const SaldoReal = Number(dto.SaldoReal ?? 0);
-        const TotalEfectivoCapturado = Number(dto.TotalEfectivoCapturado ?? 0);
-        const TotalTarjetaCapturado = Number(dto.TotalTarjetaCapturado ?? 0);
-        const TotalTransferenciaCapturado = Number(
-            dto.TotalTransferenciaCapturado ?? 0,
-        );
+        const SaldoRealNumerico = Number(SaldoReal ?? 0);
+        const TotalEfectivoCapturadoNumerico = Number(TotalEfectivoCapturado ?? 0);
+        const TotalTarjetaCapturadoNumerico = Number(TotalTarjetaCapturado ?? 0);
+        const TotalTransferenciaCapturadoNumerico = Number(TotalTransferenciaCapturado ?? 0);
 
-        const Diferencia = Number(SaldoReal) - Number(SaldoEsperado);
+        const Diferencia = SaldoRealNumerico - SaldoEsperado;
 
-        // Determinar Usuario (igual que antes)
+        // ✅ VALIDACIÓN 3: Diferencia significativa requiere observaciones
+        if (Math.abs(Diferencia) > 0 && SaldoEsperado !== 0) {
+            const porcentajeDiferencia = (Math.abs(Diferencia) / Math.abs(SaldoEsperado)) * 100;
+
+            if (porcentajeDiferencia > 5) {
+                console.warn(
+                    `⚠️ ADVERTENCIA: Diferencia del ${porcentajeDiferencia.toFixed(2)}% en cuadre de caja chica. ` +
+                    `Esperado: $${SaldoEsperado.toFixed(2)}, Real: $${SaldoRealNumerico.toFixed(2)}, ` +
+                    `Diferencia: $${Diferencia.toFixed(2)}`
+                );
+
+                if (!dto.Observaciones || dto.Observaciones.trim().length < 15) {
+                    throw new HttpException(
+                        `⚠️ Se requiere una observación detallada (mínimo 15 caracteres) cuando la diferencia supera el 5%. ` +
+                        `Diferencia actual: $${Diferencia.toFixed(2)} (${porcentajeDiferencia.toFixed(2)}%)`,
+                        HttpStatus.BAD_REQUEST,
+                    );
+                }
+            }
+        }
+
+        // ✅ VALIDACIÓN 4: Validar montos capturados vs esperados (con tolerancia)
+        const tolerancia = 1.05; // 5% de tolerancia
+
+        if (TotalEfectivoCapturadoNumerico > TotalEfectivo * tolerancia && TotalEfectivo >= 0) {
+            console.warn(
+                `⚠️ El efectivo capturado ($${TotalEfectivoCapturadoNumerico.toFixed(2)}) excede significativamente ` +
+                `el esperado ($${TotalEfectivo.toFixed(2)})`
+            );
+        }
+
+        if (TotalTarjetaCapturadoNumerico > TotalPagoConTarjeta * tolerancia && TotalPagoConTarjeta > 0) {
+            console.warn(
+                `⚠️ La tarjeta capturada ($${TotalTarjetaCapturadoNumerico.toFixed(2)}) excede significativamente ` +
+                `la esperada ($${TotalPagoConTarjeta.toFixed(2)})`
+            );
+        }
+
+        if (TotalTransferenciaCapturadoNumerico > TotalTransferencia * tolerancia && TotalTransferencia > 0) {
+            console.warn(
+                `⚠️ Las transferencias capturadas ($${TotalTransferenciaCapturadoNumerico.toFixed(2)}) exceden significativamente ` +
+                `las esperadas ($${TotalTransferencia.toFixed(2)})`
+            );
+        }
+
+        // Determinar Usuario
         const idUsuarioFinal = usuarioID ?? usuarioID;
         const usuario = await this.usuariosRepository.findOne({
             where: { UsuarioID: idUsuarioFinal },
         });
         if (!usuario) {
-            throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
+            throw new HttpException('❌ Usuario no encontrado', HttpStatus.NOT_FOUND);
         }
 
-        // Determinar Sucursal: usa la del parámetro (ésta manda)
+        // Determinar Sucursal
         const sucursal = await this.sucursalRepository.findOne({
             where: { SucursalID: sucursalId },
         });
 
         if (!sucursal) {
-            throw new HttpException('Sucursal no encontrada', HttpStatus.NOT_FOUND);
+            throw new HttpException('❌ Sucursal no encontrada', HttpStatus.NOT_FOUND);
+        }
+
+        // 🔥 ACCIÓN CRÍTICA: CERRAR TODOS LOS INICIOS DE CAJA DE LA SUCURSAL
+        if (iniciosActivos.length > 0) {
+            console.log(`🔒 Cerrando ${iniciosActivos.length} inicio(s) de caja de la sucursal ${sucursalId}...`);
+
+            for (const inicio of iniciosActivos) {
+                inicio.Estatus = 'Cerrado';
+                console.log(
+                    `  ✅ Inicio ${inicio.InicioCajaID} (Usuario: ${inicio.Usuario?.NombreUsuario || 'N/A'}) → Cerrado`
+                );
+            }
+
+            await this.iniciosCajaRepository.save(iniciosActivos);
+            console.log(`✅ ${iniciosActivos.length} inicio(s) cerrado(s) exitosamente`);
+        } else {
+            console.log('ℹ️ No hay inicios activos para cerrar en esta sucursal');
         }
 
         // Crear entidad de cuadre
         const nuevo = this.cajaChicaRepository.create({
             Fecha: hoy,
             FechaCierre: new Date(),
+            // Fondo inicial (para auditoría)
+            FondoInicial, // 👈 Agregar este campo a la entidad si no existe
             // Totales acumulados (ventana por sucursal)
             TotalIngresos,
             TotalEgresos,
             TotalEfectivo,
             TotalPagoConTarjeta,
             TotalTransferencia,
-            // Fondo + esperado/real
+            // Esperado/real
             SaldoEsperado,
-            SaldoReal,
-            TotalEfectivoCapturado,
-            TotalTarjetaCapturado,
-            TotalTransferenciaCapturado,
+            SaldoReal: SaldoRealNumerico,
+            TotalEfectivoCapturado: TotalEfectivoCapturadoNumerico,
+            TotalTarjetaCapturado: TotalTarjetaCapturadoNumerico,
+            TotalTransferenciaCapturado: TotalTransferenciaCapturadoNumerico,
             Diferencia,
             Observaciones: dto.Observaciones ?? null,
             UsuarioCuadre: usuario,
@@ -548,19 +642,19 @@ export class CajaChicaService {
                         .toString()
                         .padStart(3, '0')}`,
             Estatus: 'Cerrado',
+            // 👇 Opcional: agregar metadata de inicios cerrados
+            // IniciosCerrados: iniciosActivos.map(i => i.InicioCajaID).join(','),
         } as Partial<CajaChica>);
 
-        const guardado = await this.cajaChicaRepository.save(
-            nuevo as CajaChica,
-        );
+        const guardado = await this.cajaChicaRepository.save(nuevo as CajaChica);
 
-        // 🔗 NUEVO: ligar todos los cortes cerrados usados en este cuadre con la CajaChica
+        // 🔗 Ligar todos los cortes cerrados usados en este cuadre con la CajaChica
         for (const corte of cortesCerrados) {
             corte.CajaChica = guardado;
         }
         await this.cortesUsuariosRepository.save(cortesCerrados);
 
-        // Bitácora (igual que antes)
+        // Bitácora mejorada
         await this.bitacoraEdicionesRepository.save(
             this.bitacoraEdicionesRepository.create({
                 Entidad: 'CajaChica',
@@ -569,19 +663,56 @@ export class CajaChicaService {
                     Estatus: { anterior: 'Pendiente', nuevo: 'Cerrado' },
                     FondoInicial: { anterior: 0, nuevo: FondoInicial },
                     SaldoEsperado: { anterior: 0, nuevo: SaldoEsperado },
-                    SaldoReal: { anterior: 0, nuevo: SaldoReal },
+                    SaldoReal: { anterior: 0, nuevo: SaldoRealNumerico },
                     Diferencia: { anterior: 0, nuevo: Diferencia },
+                    IniciosCerrados: {
+                        cantidad: iniciosActivos.length,
+                        detalles: iniciosActivos.map(i => ({
+                            InicioCajaID: i.InicioCajaID,
+                            Usuario: i.Usuario?.NombreUsuario,
+                            Monto: Number(i.MontoInicial),
+                        }))
+                    },
+                    CortesProcesados: {
+                        cantidad: cortesCerrados.length,
+                        usuarios: [...new Set(cortesCerrados.map(c => c.usuarioID?.NombreUsuario))],
+                    }
                 },
                 UsuarioEdicion: String(usuario.UsuarioID),
                 FechaEdicion: new Date(),
             }),
         );
 
+        // 📊 LOG FINAL: Resumen completo del cuadre
+        console.log('✅ ============ CUADRE DE CAJA CHICA EXITOSO ============');
+
+        console.log(`📅 Período: ${desde.toISOString().split('T')[0]} a ${finDia.toISOString().split('T')[0]}`);
+        console.log(`💰 Fondo Inicial: $${FondoInicial.toFixed(2)}`);
+        console.log(`📈 Ingresos: $${TotalIngresos.toFixed(2)}`);
+        console.log(`📉 Egresos: $${TotalEgresos.toFixed(2)}`);
+        console.log(`💵 Efectivo: $${TotalEfectivo.toFixed(2)}`);
+        console.log(`💳 Tarjeta: $${TotalPagoConTarjeta.toFixed(2)}`);
+        console.log(`🏦 Transferencia: $${TotalTransferencia.toFixed(2)}`);
+        console.log(`🎯 Saldo Esperado: $${SaldoEsperado.toFixed(2)}`);
+        console.log(`💼 Saldo Real: $${SaldoRealNumerico.toFixed(2)}`);
+        console.log(`${Diferencia >= 0 ? '✅' : '⚠️'} Diferencia: $${Diferencia.toFixed(2)}`);
+        console.log(`🔒 Inicios Cerrados: ${iniciosActivos.length}`);
+        console.log(`📋 Cortes Procesados: ${cortesCerrados.length}`);
+        console.log(`📄 Folio: ${guardado.FolioCierre}`);
+        console.log('========================================================');
+
         return {
-            message:
-                '✅ Cuadre de Caja Chica realizado exitosamente para la sucursal ' +
-                sucursalId,
+            message: '✅ Cuadre de Caja Chica realizado exitosamente para la sucursal ' + sucursalId,
             cuadre: guardado,
+            detalles: {
+                iniciosCerrados: iniciosActivos.length,
+                cortesProcesados: cortesCerrados.length,
+                fondoInicial: FondoInicial,
+                diferencia: Diferencia,
+                porcentajeDiferencia: SaldoEsperado !== 0
+                    ? ((Math.abs(Diferencia) / Math.abs(SaldoEsperado)) * 100).toFixed(2) + '%'
+                    : 'N/A',
+            },
         };
     }
 

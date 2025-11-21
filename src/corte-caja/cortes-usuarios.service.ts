@@ -1228,8 +1228,8 @@ export class CortesUsuariosService {
     const corteGuardado = await this.cortesUsuariosRepository.save(nuevoCorte);
 
     // **Actualizar el inicio de caja para marcarlo como "Cerrado"**
-    inicioCaja.Estatus = 'Cerrado';
-    await this.iniciosCajaRepository.save(inicioCaja);
+    //inicioCaja.Estatus = 'Cerrado';
+    //await this.iniciosCajaRepository.save(inicioCaja);
 
     // 🔗 Amarrar Transacciones y PagosPoliza a este corte
     const transaccionesDelCorte = await this.transaccionesRepository.find({
