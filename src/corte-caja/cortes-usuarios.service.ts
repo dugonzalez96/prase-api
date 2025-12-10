@@ -712,13 +712,15 @@ export class CortesUsuariosService {
     });
 
     // 🔍 DEBUG CÁLCULOS FINALES
-    const saldoEsperado =
-      Number(inicioCaja.MontoInicial) + totalIngresos - totalEgresos;
-
     const totalEfectivo =
       Number(inicioCaja.TotalEfectivo) +
       totalIngresosEfectivo -
       totalEgresosEfectivo;
+
+    // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
+    // totalEfectivo ya incluye: inicioCaja.TotalEfectivo + ingresosEfectivo - egresosEfectivo
+    // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
+    const saldoEsperado = totalEfectivo;
 
     const totalTransferencia =
       Number(inicioCaja.TotalTransferencia) +
@@ -909,17 +911,16 @@ export class CortesUsuariosService {
         totalIngresosTransferencia += Number(pago.MontoPagado);
     });
 
-    // 🔹 Calcular saldo esperado
-    const saldoEsperado =
-      Number(corte.InicioCaja?.MontoInicial || 0) +
-      totalIngresos -
-      totalEgresos;
-
     // 🔹 Correcciones de cálculos
     const totalEfectivo =
       Number(corte.InicioCaja?.TotalEfectivo || 0) +
       totalIngresosEfectivo -
       totalEgresosEfectivo;
+
+    // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
+    // totalEfectivo ya incluye: inicioCaja.TotalEfectivo + ingresosEfectivo - egresosEfectivo
+    // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
+    const saldoEsperado = totalEfectivo;
 
     const totalTransferencia =
       Number(corte.InicioCaja?.TotalTransferencia || 0) +
@@ -1119,27 +1120,42 @@ export class CortesUsuariosService {
       await this.transaccionesRepository.save(transaccionesSinCaja);
     }
 
-    // **Calculamos la diferencia entre el saldo esperado y el saldo real**
-    const diferencia = saldoReal - corteCalculado.SaldoEsperado;
+    // 💵 DIFERENCIA SOLO DE EFECTIVO: Comparar efectivo real vs efectivo esperado
+    // (antes comparaba suma total vs efectivo esperado, lo cual estaba incorrecto)
+    const diferencia = totalEfectivoCapturado - corteCalculado.SaldoEsperado;
 
     // ✅ VALIDACIÓN 4: Advertencia de diferencia significativa
-    if (Math.abs(diferencia) > 0 && corteCalculado.SaldoEsperado !== 0) {
-      const porcentajeDiferencia = (Math.abs(diferencia) / Math.abs(corteCalculado.SaldoEsperado)) * 100;
-
-      if (porcentajeDiferencia > 10) { // Si la diferencia es mayor al 10%
-        console.warn(
-          `⚠️ ADVERTENCIA CRÍTICA: Diferencia del ${porcentajeDiferencia.toFixed(2)}% detectada. ` +
-          `Esperado: $${corteCalculado.SaldoEsperado.toFixed(2)}, Real: $${saldoReal.toFixed(2)}, ` +
-          `Diferencia: $${diferencia.toFixed(2)}`
+    if (Math.abs(diferencia) > 0.01) { // Tolerancia de 1 centavo por redondeo
+      // 🔴 CUALQUIER diferencia requiere observaciones
+      if (!observaciones || observaciones.trim().length === 0) {
+        throw new HttpException(
+          `❌ Se requiere una observación cuando existe diferencia entre efectivo esperado y real. ` +
+          `Efectivo esperado: $${corteCalculado.SaldoEsperado.toFixed(2)}, ` +
+          `Efectivo capturado: $${totalEfectivoCapturado.toFixed(2)}, ` +
+          `Diferencia: $${diferencia.toFixed(2)}`,
+          HttpStatus.BAD_REQUEST,
         );
+      }
 
-        // Opcional: Requerir observaciones obligatorias en diferencias grandes
-        if (!observaciones || observaciones.trim().length < 10) {
-          throw new HttpException(
-            `⚠️ Se requiere una observación detallada (mínimo 10 caracteres) cuando la diferencia supera el 10%. ` +
-            `Diferencia actual: $${diferencia.toFixed(2)} (${porcentajeDiferencia.toFixed(2)}%)`,
-            HttpStatus.BAD_REQUEST,
+      // Si la diferencia es > 10%, requiere observación MÁS DETALLADA
+      if (corteCalculado.SaldoEsperado !== 0) {
+        const porcentajeDiferencia = (Math.abs(diferencia) / Math.abs(corteCalculado.SaldoEsperado)) * 100;
+
+        if (porcentajeDiferencia > 10) {
+          console.warn(
+            `⚠️ ADVERTENCIA CRÍTICA: Diferencia del ${porcentajeDiferencia.toFixed(2)}% detectada. ` +
+            `Efectivo esperado: $${corteCalculado.SaldoEsperado.toFixed(2)}, Efectivo capturado: $${totalEfectivoCapturado.toFixed(2)}, ` +
+            `Diferencia: $${diferencia.toFixed(2)}`
           );
+
+          // Diferencias grandes requieren observación más detallada
+          if (observaciones.trim().length < 10) {
+            throw new HttpException(
+              `⚠️ Se requiere una observación DETALLADA (mínimo 10 caracteres) cuando la diferencia supera el 10%. ` +
+              `Diferencia actual: $${diferencia.toFixed(2)} (${porcentajeDiferencia.toFixed(2)}%)`,
+              HttpStatus.BAD_REQUEST,
+            );
+          }
         }
       }
     }

@@ -11,6 +11,8 @@ import { BitacoraEdiciones } from 'src/bitacora-ediciones/bitacora-ediciones.ent
 import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.entity';
 import { IniciosCaja } from 'src/inicios-caja/entities/inicios-caja.entity';
 import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
+import { Transacciones } from 'src/transacciones/entities/transacciones.entity';
+import { PagosPoliza } from 'src/pagos-poliza/entities/pagos-poliza.entity';
 
 type EstatusCajaChica = 'Pendiente' | 'Cerrado' | 'Cancelado';
 
@@ -39,6 +41,12 @@ export class CajaChicaService {
 
         @InjectRepository(BitacoraEliminaciones, 'db1')
         private readonly bitacoraEliminacionesRepository: Repository<BitacoraEliminaciones>,
+
+        @InjectRepository(Transacciones, 'db1')
+        private readonly transaccionesRepository: Repository<Transacciones>,
+
+        @InjectRepository(PagosPoliza, 'db1')
+        private readonly pagosPolizaRepository: Repository<PagosPoliza>,
     ) { }
 
     // ============================================================
@@ -94,10 +102,18 @@ export class CajaChicaService {
 
 
     /**
-     * Usuarios con "movimientos" SIN corte CERRADO en la ventana.
-     * En ausencia de tabla de movimientos, usamos como proxy:
-     *   - IniciosCaja con Estatus Activo/Pendiente en la ventana
-     *   - y NO existe un CorteUsuarios CERRADO para ese usuario en la ventana
+     * 🔍 VALIDACIÓN CRÍTICA: Usuarios con "movimientos" SIN corte CERRADO en la ventana
+     *
+     * REGLA DE NEGOCIO (FASE 1):
+     * "La caja chica no se debe poder cuadrar, si existe algún usuario que haya
+     * tenido movimientos durante el día y que no se le haya realizado el corte respectivo."
+     *
+     * MOVIMIENTOS = Transacciones + Pagos de Póliza
+     *
+     * @param desde - Fecha inicio de la ventana (desde último cuadre)
+     * @param finDia - Fecha fin de la ventana (hoy)
+     * @param sucursalId - ID de la sucursal
+     * @returns Lista de usuarios con movimientos sin corte cerrado
      */
     private async getUsuariosConMovimientosSinCorte(
         desde: Date,
@@ -106,31 +122,67 @@ export class CajaChicaService {
     ) {
         if (!sucursalId) return [];
 
-        // Inicios activos/pendientes en la sucursal (proxy de “hubo dinero”)
-        const inicios = await this.iniciosCajaRepository.find({
-            where: { Estatus: In(['Activo', 'Pendiente']) },
-            relations: ['Usuario'],
-            order: { FechaInicio: 'DESC' },
+        console.log(`🔍 Validando usuarios con movimientos sin corte en sucursal ${sucursalId}`);
+        console.log(`   Ventana: ${desde.toISOString()} → ${finDia.toISOString()}`);
+
+        // 1️⃣ Buscar todos los usuarios de la sucursal
+        const usuariosSucursal = await this.usuariosRepository.find({
+            where: { SucursalID: sucursalId },
         });
 
-        // Solo inicios donde el usuario pertenece a esa sucursal
-        const iniciosEnSucursal = inicios.filter(
-            (i) => i.Usuario?.SucursalID === sucursalId && new Date(i.FechaInicio) <= finDia,
+        if (usuariosSucursal.length === 0) {
+            console.log('   ℹ️ No hay usuarios en esta sucursal');
+            return [];
+        }
+
+        const usuariosIds = usuariosSucursal.map((u) => u.UsuarioID);
+        console.log(`   👥 ${usuariosIds.length} usuarios en la sucursal`);
+
+        // 2️⃣ Buscar usuarios con TRANSACCIONES en la ventana
+        const transacciones = await this.transaccionesRepository
+            .createQueryBuilder('t')
+            .leftJoin('t.UsuarioCreo', 'u')
+            .where('u.UsuarioID IN (:...usuariosIds)', { usuariosIds })
+            .andWhere('t.FechaTransaccion BETWEEN :desde AND :finDia', { desde, finDia })
+            .select('DISTINCT u.UsuarioID', 'UsuarioID')
+            .getRawMany();
+
+        const usuariosConTransacciones = new Set(
+            transacciones.map((t) => t.UsuarioID),
         );
 
-        if (iniciosEnSucursal.length === 0) return [];
+        console.log(`   📝 ${usuariosConTransacciones.size} usuarios con transacciones`);
 
-        const usuariosIds = [
-            ...new Set(
-                iniciosEnSucursal
-                    .map((i) => i.Usuario?.UsuarioID)
-                    .filter((id) => !!id),
-            ),
-        ];
+        // 3️⃣ Buscar usuarios con PAGOS DE PÓLIZA en la ventana
+        const pagosPoliza = await this.pagosPolizaRepository
+            .createQueryBuilder('p')
+            .leftJoin('p.Usuario', 'u')
+            .where('u.UsuarioID IN (:...usuariosIds)', { usuariosIds })
+            .andWhere('p.FechaPago BETWEEN :desde AND :finDia', { desde, finDia })
+            .andWhere('p.MotivoCancelacion IS NULL')
+            .select('DISTINCT u.UsuarioID', 'UsuarioID')
+            .getRawMany();
 
-        if (usuariosIds.length === 0) return [];
+        const usuariosConPagos = new Set(
+            pagosPoliza.map((p) => p.UsuarioID),
+        );
 
-        // Cortes CERRADOS de esos usuarios en esa sucursal y en la ventana
+        console.log(`   💳 ${usuariosConPagos.size} usuarios con pagos de póliza`);
+
+        // 4️⃣ UNION: Usuarios con movimientos (transacciones O pagos)
+        const usuariosConMovimientos = new Set([
+            ...usuariosConTransacciones,
+            ...usuariosConPagos,
+        ]);
+
+        if (usuariosConMovimientos.size === 0) {
+            console.log('   ✅ No hay usuarios con movimientos en la ventana');
+            return [];
+        }
+
+        console.log(`   📊 TOTAL: ${usuariosConMovimientos.size} usuarios con movimientos`);
+
+        // 5️⃣ Buscar usuarios con CORTES CERRADOS en la ventana
         const cortesCerrados = await this.cortesUsuariosRepository.find({
             where: {
                 FechaCorte: Between(desde, finDia),
@@ -140,28 +192,40 @@ export class CajaChicaService {
             relations: ['usuarioID', 'Sucursal'],
         });
 
-        const setUsuariosConCorteCerrado = new Set(
+        const usuariosConCorteCerrado = new Set(
             cortesCerrados.map((c) => c.usuarioID?.UsuarioID),
         );
 
-        // Usuarios con inicio activo/pendiente pero SIN corte CERRADO
-        const usuariosSinCorte = usuariosIds.filter(
-            (uid) => !setUsuariosConCorteCerrado.has(uid),
+        console.log(`   ✅ ${usuariosConCorteCerrado.size} usuarios con corte CERRADO`);
+
+        // 6️⃣ FILTRAR: Usuarios con movimientos pero SIN corte cerrado
+        const usuariosSinCorte = Array.from(usuariosConMovimientos).filter(
+            (uid) => !usuariosConCorteCerrado.has(uid),
         );
 
-        if (usuariosSinCorte.length === 0) return [];
+        if (usuariosSinCorte.length === 0) {
+            console.log('   ✅ Todos los usuarios con movimientos tienen corte cerrado');
+            return [];
+        }
 
+        console.log(`   ❌ ${usuariosSinCorte.length} usuarios con movimientos SIN corte cerrado`);
+
+        // 7️⃣ Obtener detalles de usuarios problemáticos
         const detalle = await this.usuariosRepository.find({
             where: {
-                UsuarioID: In(usuariosSinCorte as number[]),
+                UsuarioID: In(usuariosSinCorte),
                 SucursalID: sucursalId,
             },
         });
 
-        return detalle.map((u) => ({
+        const resultado = detalle.map((u) => ({
             UsuarioID: u.UsuarioID,
             Nombre: u.NombreUsuario,
         }));
+
+        console.log(`   🚨 Usuarios que bloquean el cuadre:`, resultado);
+
+        return resultado;
     }
 
 
@@ -245,8 +309,10 @@ export class CajaChicaService {
             ),
         };
 
-        const SaldoEsperado =
-            Number(FondoInicial) + (Totales.TotalIngresos - Totales.TotalEgresos);
+        // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
+        // TotalEfectivo ya incluye: FondoInicial + ingresosEfectivo - egresosEfectivo
+        // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
+        const SaldoEsperado = Totales.TotalEfectivo;
 
         // Validación: usuarios con “movimientos” sin corte CERRADO, SOLO sucursal
         const usuariosMovSinCorte = await this.getUsuariosConMovimientosSinCorte(
@@ -520,8 +586,10 @@ export class CajaChicaService {
             0,
         );
 
-        // Saldo esperado con fondo
-        const SaldoEsperado = Number(FondoInicial) + (TotalIngresos - TotalEgresos);
+        // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
+        // TotalEfectivo ya incluye: suma de TotalEfectivo de cada corte cerrado
+        // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
+        const SaldoEsperado = TotalEfectivo;
 
         // Capturables del dto
         const SaldoRealNumerico = Number(SaldoReal ?? 0);
@@ -529,25 +597,42 @@ export class CajaChicaService {
         const TotalTarjetaCapturadoNumerico = Number(TotalTarjetaCapturado ?? 0);
         const TotalTransferenciaCapturadoNumerico = Number(TotalTransferenciaCapturado ?? 0);
 
-        const Diferencia = SaldoRealNumerico - SaldoEsperado;
+        // 💵 DIFERENCIA SOLO DE EFECTIVO: Comparar efectivo real vs efectivo esperado
+        // (antes comparaba suma total vs efectivo esperado, lo cual estaba incorrecto)
+        const Diferencia = TotalEfectivoCapturadoNumerico - SaldoEsperado;
 
         // ✅ VALIDACIÓN 3: Diferencia significativa requiere observaciones
-        if (Math.abs(Diferencia) > 0 && SaldoEsperado !== 0) {
-            const porcentajeDiferencia = (Math.abs(Diferencia) / Math.abs(SaldoEsperado)) * 100;
-
-            if (porcentajeDiferencia > 5) {
-                console.warn(
-                    `⚠️ ADVERTENCIA: Diferencia del ${porcentajeDiferencia.toFixed(2)}% en cuadre de caja chica. ` +
-                    `Esperado: $${SaldoEsperado.toFixed(2)}, Real: $${SaldoRealNumerico.toFixed(2)}, ` +
-                    `Diferencia: $${Diferencia.toFixed(2)}`
+        if (Math.abs(Diferencia) > 0.01) { // Tolerancia de 1 centavo por redondeo
+            // 🔴 CUALQUIER diferencia requiere observaciones
+            if (!dto.Observaciones || dto.Observaciones.trim().length === 0) {
+                throw new HttpException(
+                    `❌ Se requiere una observación cuando existe diferencia entre efectivo esperado y real. ` +
+                    `Efectivo esperado: $${SaldoEsperado.toFixed(2)}, ` +
+                    `Efectivo capturado: $${TotalEfectivoCapturadoNumerico.toFixed(2)}, ` +
+                    `Diferencia: $${Diferencia.toFixed(2)}`,
+                    HttpStatus.BAD_REQUEST,
                 );
+            }
 
-                if (!dto.Observaciones || dto.Observaciones.trim().length < 15) {
-                    throw new HttpException(
-                        `⚠️ Se requiere una observación detallada (mínimo 15 caracteres) cuando la diferencia supera el 5%. ` +
-                        `Diferencia actual: $${Diferencia.toFixed(2)} (${porcentajeDiferencia.toFixed(2)}%)`,
-                        HttpStatus.BAD_REQUEST,
+            // Si la diferencia es > 5%, requiere observación MÁS DETALLADA
+            if (SaldoEsperado !== 0) {
+                const porcentajeDiferencia = (Math.abs(Diferencia) / Math.abs(SaldoEsperado)) * 100;
+
+                if (porcentajeDiferencia > 5) {
+                    console.warn(
+                        `⚠️ ADVERTENCIA: Diferencia del ${porcentajeDiferencia.toFixed(2)}% en cuadre de caja chica. ` +
+                        `Efectivo esperado: $${SaldoEsperado.toFixed(2)}, Efectivo capturado: $${TotalEfectivoCapturadoNumerico.toFixed(2)}, ` +
+                        `Diferencia: $${Diferencia.toFixed(2)}`
                     );
+
+                    // Diferencias grandes requieren observación más detallada
+                    if (dto.Observaciones.trim().length < 15) {
+                        throw new HttpException(
+                            `⚠️ Se requiere una observación DETALLADA (mínimo 15 caracteres) cuando la diferencia supera el 5%. ` +
+                            `Diferencia actual: $${Diferencia.toFixed(2)} (${porcentajeDiferencia.toFixed(2)}%)`,
+                            HttpStatus.BAD_REQUEST,
+                        );
+                    }
                 }
             }
         }
@@ -693,9 +778,9 @@ export class CajaChicaService {
         console.log(`💵 Efectivo: $${TotalEfectivo.toFixed(2)}`);
         console.log(`💳 Tarjeta: $${TotalPagoConTarjeta.toFixed(2)}`);
         console.log(`🏦 Transferencia: $${TotalTransferencia.toFixed(2)}`);
-        console.log(`🎯 Saldo Esperado: $${SaldoEsperado.toFixed(2)}`);
-        console.log(`💼 Saldo Real: $${SaldoRealNumerico.toFixed(2)}`);
-        console.log(`${Diferencia >= 0 ? '✅' : '⚠️'} Diferencia: $${Diferencia.toFixed(2)}`);
+        console.log(`🎯 Efectivo Esperado: $${SaldoEsperado.toFixed(2)}`);
+        console.log(`💼 Efectivo Capturado: $${TotalEfectivoCapturadoNumerico.toFixed(2)}`);
+        console.log(`${Diferencia >= 0 ? '✅' : '⚠️'} Diferencia (Efectivo): $${Diferencia.toFixed(2)}`);
         console.log(`🔒 Inicios Cerrados: ${iniciosActivos.length}`);
         console.log(`📋 Cortes Procesados: ${cortesCerrados.length}`);
         console.log(`📄 Folio: ${guardado.FolioCierre}`);

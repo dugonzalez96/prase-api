@@ -134,13 +134,9 @@ export class CajaGeneralService {
         const entradasTransaccionesIngreso: MovimientoTimelineDto[] = [];
 
         cajasChica.forEach((cc) => {
-            const montoEntrega = Number(
-                cc.SaldoReal ??
-                cc.SaldoEsperado ??
-                (Number(cc.TotalEfectivo || 0) +
-                    Number(cc.TotalPagoConTarjeta || 0) +
-                    Number(cc.TotalTransferencia || 0)),
-            );
+            // 💵 SOLO EFECTIVO: El monto de entrega de caja chica debe ser solo efectivo físico
+            // Tarjeta y transferencia están en el banco, no en caja física
+            const montoEntrega = Number(cc.TotalEfectivo || 0);
 
             const mov: MovimientoTimelineDto = {
                 hora: cc.FechaCierre
@@ -568,6 +564,7 @@ export class CajaGeneralService {
     }
 
     // CUADRAR CAJA GENERAL
+    // CUADRAR CAJA GENERAL
     async cuadrarCajaGeneral(dto: CuadrarCajaGeneralDto): Promise<CajaGeneral> {
         const {
             fecha,
@@ -607,7 +604,81 @@ export class CajaGeneralService {
         const saldoRealUsado =
             typeof saldoReal === 'number' ? saldoReal : saldoCalculado;
 
-        const diferencia = saldoRealUsado - saldoCalculado;
+        // 💵 DIFERENCIA SOLO DE EFECTIVO: Comparar efectivo real vs efectivo esperado
+        // Si se proporciona totalEfectivoCapturado, usarlo; sino, usar saldoRealUsado (por compatibilidad)
+        const efectivoCapturado = typeof totalEfectivoCapturado === 'number' ? totalEfectivoCapturado : saldoRealUsado;
+        const diferencia = efectivoCapturado - saldoCalculado;
+
+        // ✅ VALIDACIÓN: Diferencia requiere observaciones
+        if (Math.abs(diferencia) > 0.01) { // Tolerancia de 1 centavo por redondeo
+            // 🔴 CUALQUIER diferencia requiere observaciones
+            if (!observaciones || observaciones.trim().length === 0) {
+                throw new HttpException(
+                    `❌ Se requiere una observación cuando existe diferencia entre efectivo esperado y real. ` +
+                    `Efectivo esperado: $${saldoCalculado.toFixed(2)}, ` +
+                    `Efectivo capturado: $${efectivoCapturado.toFixed(2)}, ` +
+                    `Diferencia: $${diferencia.toFixed(2)}`,
+                    HttpStatus.BAD_REQUEST,
+                );
+            }
+
+            // Si la diferencia es > 5%, requiere observación MÁS DETALLADA
+            if (saldoCalculado !== 0) {
+                const porcentajeDiferencia = (Math.abs(diferencia) / Math.abs(saldoCalculado)) * 100;
+
+                if (porcentajeDiferencia > 5) {
+                    console.warn(
+                        `⚠️ ADVERTENCIA CRÍTICA: Diferencia del ${porcentajeDiferencia.toFixed(2)}% en cuadre de caja general. ` +
+                        `Efectivo esperado: $${saldoCalculado.toFixed(2)}, Efectivo capturado: $${efectivoCapturado.toFixed(2)}, ` +
+                        `Diferencia: $${diferencia.toFixed(2)}`
+                    );
+
+                    // Diferencias grandes requieren observación más detallada
+                    if (observaciones.trim().length < 15) {
+                        throw new HttpException(
+                            `⚠️ Se requiere una observación DETALLADA (mínimo 15 caracteres) cuando la diferencia supera el 5%. ` +
+                            `Diferencia actual: $${diferencia.toFixed(2)} (${porcentajeDiferencia.toFixed(2)}%)`,
+                            HttpStatus.BAD_REQUEST,
+                        );
+                    }
+                }
+            }
+        }
+
+        // ✅ VALIDACIÓN: Montos capturados no negativos
+        if (
+            (typeof totalEfectivoCapturado === 'number' && totalEfectivoCapturado < 0) ||
+            (typeof totalTarjetaCapturado === 'number' && totalTarjetaCapturado < 0) ||
+            (typeof totalTransferenciaCapturado === 'number' && totalTransferenciaCapturado < 0)
+        ) {
+            throw new HttpException(
+                '❌ Los montos capturados no pueden ser negativos',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        // ✅ VALIDACIÓN: SaldoReal debe coincidir con suma de capturados (si se proporcionan)
+        if (
+            typeof totalEfectivoCapturado === 'number' ||
+            typeof totalTarjetaCapturado === 'number' ||
+            typeof totalTransferenciaCapturado === 'number'
+        ) {
+            const sumaCapturados =
+                (totalEfectivoCapturado ?? 0) +
+                (totalTarjetaCapturado ?? 0) +
+                (totalTransferenciaCapturado ?? 0);
+
+            const diferenciaCaptura = Math.abs(saldoRealUsado - sumaCapturados);
+
+            if (diferenciaCaptura > 0.01) {
+                throw new HttpException(
+                    `❌ Inconsistencia: El saldo real ($${saldoRealUsado.toFixed(2)}) no coincide ` +
+                    `con la suma de montos capturados ($${sumaCapturados.toFixed(2)}). ` +
+                    `Diferencia: $${diferenciaCaptura.toFixed(2)}`,
+                    HttpStatus.BAD_REQUEST,
+                );
+            }
+        }
 
         const totalDesdeCajaChica =
             dashboard.entradasDetalle.cortesCajaChica.reduce(
@@ -752,6 +823,49 @@ export class CajaGeneralService {
         });
     }
 
+    /**
+     * 🌍 Convertir fecha local a rango UTC usando timezone de la sucursal
+     *
+     * IMPORTANTE: Debe ser consistente con getTimezoneForSucursal()
+     * y con el manejo de zonas horarias en caja-chica y cortes-usuarios
+     *
+     * @param fecha - Fecha en formato YYYY-MM-DD
+     * @param sucursalId - ID de la sucursal (opcional)
+     * @returns Rango UTC para búsqueda en BD
+     */
+    private async getLocalDayRangeToUTCWithTimezone(fecha: string, sucursalId?: number) {
+        // 🌍 Obtener timezone de la sucursal
+        const timezone = await this.getTimezoneForSucursal(sucursalId);
+
+        // Parsear fecha como LOCAL
+        const [year, month, day] = fecha.split('-').map(Number);
+
+        // Crear fecha en hora local (ignorando UTC)
+        const startLocal = new Date(year, month - 1, day, 0, 0, 0, 0);
+        const endLocal = new Date(year, month - 1, day, 23, 59, 59, 999);
+
+        console.log(`📅 Fecha local interpretada (timezone: ${timezone}):`, {
+            inicio: startLocal.toString(),
+            fin: endLocal.toString(),
+        });
+
+        // Estas fechas YA están en hora local del servidor
+        // Al guardarlas en BD se convertirán automáticamente a UTC
+        const startUTC = startLocal;
+        const endUTC = endLocal;
+
+        console.log('🌍 Rango UTC para búsqueda:', {
+            inicio: startUTC.toISOString(),
+            fin: endUTC.toISOString(),
+        });
+
+        return { startUTC, endUTC };
+    }
+
+    /**
+     * @deprecated Use getLocalDayRangeToUTCWithTimezone() instead
+     * Mantener por compatibilidad con código existente
+     */
     private getLocalDayRangeToUTC(fecha: string, timezone: string = 'America/Mexico_City') {
         // Parsear fecha como LOCAL (sin zona horaria)
         const [year, month, day] = fecha.split('-').map(Number);
