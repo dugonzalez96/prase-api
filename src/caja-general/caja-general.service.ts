@@ -563,6 +563,138 @@ export class CajaGeneralService {
         };
     }
 
+    /**
+     * 🔍 VALIDACIÓN CRÍTICA GLOBAL: Usuarios con movimientos SIN corte CERRADO
+     *
+     * REGLA DE NEGOCIO (FASE 1):
+     * "La caja general no se debe poder cuadrar si existe algún usuario (de cualquier sucursal)
+     * que haya tenido movimientos durante el día y que no se le haya realizado el corte respectivo."
+     *
+     * DIFERENCIA vs Caja Chica: Esta validación es GLOBAL (todas las sucursales)
+     *
+     * @param fecha - Fecha del cuadre en formato YYYY-MM-DD
+     * @returns Lista de usuarios con movimientos sin corte (agrupados por sucursal)
+     */
+    private async getUsuariosConMovimientosSinCorteGlobal(fecha: string) {
+        console.log('🌍 Validando usuarios con movimientos sin corte GLOBAL');
+        console.log(`   Fecha: ${fecha}`);
+
+        // 1️⃣ Obtener rango de fechas del día
+        const { startUTC, endUTC } = await this.getLocalDayRangeToUTCWithTimezone(fecha);
+
+        console.log(`   Ventana: ${startUTC.toISOString()} → ${endUTC.toISOString()}`);
+
+        // 2️⃣ Buscar TODOS los usuarios con TRANSACCIONES en el día
+        const transacciones = await this.transaccionesRepo
+            .createQueryBuilder('t')
+            .leftJoin('t.UsuarioCreo', 'u')
+            .leftJoin('u.Sucursal', 's')
+            .where('t.FechaTransaccion BETWEEN :startUTC AND :endUTC', { startUTC, endUTC })
+            .select('DISTINCT u.UsuarioID', 'UsuarioID')
+            .addSelect('u.NombreUsuario', 'NombreUsuario')
+            .addSelect('s.SucursalID', 'SucursalID')
+            .addSelect('s.NombreSucursal', 'NombreSucursal')
+            .getRawMany();
+
+        console.log(`   📝 ${transacciones.length} usuarios con transacciones`);
+
+        // 3️⃣ Buscar TODOS los usuarios con PAGOS DE PÓLIZA en el día
+        const pagosPoliza = await this.pagosPolizaRepo
+            .createQueryBuilder('p')
+            .leftJoin('p.Usuario', 'u')
+            .leftJoin('u.Sucursal', 's')
+            .where('p.FechaPago BETWEEN :startUTC AND :endUTC', { startUTC, endUTC })
+            .andWhere('p.MotivoCancelacion IS NULL')
+            .select('DISTINCT u.UsuarioID', 'UsuarioID')
+            .addSelect('u.NombreUsuario', 'NombreUsuario')
+            .addSelect('s.SucursalID', 'SucursalID')
+            .addSelect('s.NombreSucursal', 'NombreSucursal')
+            .getRawMany();
+
+        console.log(`   💳 ${pagosPoliza.length} usuarios con pagos de póliza`);
+
+        // 4️⃣ UNION: Usuarios con movimientos (transacciones O pagos)
+        const movimientosMap = new Map<number, { UsuarioID: number; NombreUsuario: string; SucursalID: number; NombreSucursal: string }>();
+
+        transacciones.forEach((t) => {
+            if (t.UsuarioID) {
+                movimientosMap.set(t.UsuarioID, {
+                    UsuarioID: t.UsuarioID,
+                    NombreUsuario: t.NombreUsuario,
+                    SucursalID: t.SucursalID,
+                    NombreSucursal: t.NombreSucursal,
+                });
+            }
+        });
+
+        pagosPoliza.forEach((p) => {
+            if (p.UsuarioID) {
+                movimientosMap.set(p.UsuarioID, {
+                    UsuarioID: p.UsuarioID,
+                    NombreUsuario: p.NombreUsuario,
+                    SucursalID: p.SucursalID,
+                    NombreSucursal: p.NombreSucursal,
+                });
+            }
+        });
+
+        if (movimientosMap.size === 0) {
+            console.log('   ✅ No hay usuarios con movimientos en el día');
+            return [];
+        }
+
+        console.log(`   📊 TOTAL: ${movimientosMap.size} usuarios con movimientos (todas las sucursales)`);
+
+        // 5️⃣ Buscar usuarios con CORTES CERRADOS en el día (todas las sucursales)
+        const cortesCerrados = await this.cortesUsuariosRepo
+            .createQueryBuilder('c')
+            .leftJoin('c.usuarioID', 'u')
+            .where('c.FechaCorte BETWEEN :startUTC AND :endUTC', { startUTC, endUTC })
+            .andWhere('c.Estatus = :estatus', { estatus: 'Cerrado' })
+            .select('u.UsuarioID', 'UsuarioID')
+            .getRawMany();
+
+        const usuariosConCorteCerrado = new Set(
+            cortesCerrados.map((c) => c.UsuarioID),
+        );
+
+        console.log(`   ✅ ${usuariosConCorteCerrado.size} usuarios con corte CERRADO`);
+
+        // 6️⃣ FILTRAR: Usuarios con movimientos pero SIN corte cerrado
+        const usuariosSinCorte = Array.from(movimientosMap.values()).filter(
+            (usuario) => !usuariosConCorteCerrado.has(usuario.UsuarioID),
+        );
+
+        if (usuariosSinCorte.length === 0) {
+            console.log('   ✅ Todos los usuarios con movimientos tienen corte cerrado');
+            return [];
+        }
+
+        console.log(`   ❌ ${usuariosSinCorte.length} usuarios con movimientos SIN corte cerrado`);
+
+        // 7️⃣ Agrupar por sucursal para mejor visualización
+        const usuariosPorSucursal = usuariosSinCorte.reduce((acc, usuario) => {
+            const sucursalNombre = usuario.NombreSucursal || 'Sin sucursal';
+            if (!acc[sucursalNombre]) {
+                acc[sucursalNombre] = [];
+            }
+            acc[sucursalNombre].push({
+                UsuarioID: usuario.UsuarioID,
+                Nombre: usuario.NombreUsuario,
+            });
+            return acc;
+        }, {} as Record<string, Array<{ UsuarioID: number; Nombre: string }>>);
+
+        console.log(`   🚨 Usuarios por sucursal que bloquean el cuadre:`, usuariosPorSucursal);
+
+        return usuariosSinCorte.map((u) => ({
+            UsuarioID: u.UsuarioID,
+            Nombre: u.NombreUsuario,
+            SucursalID: u.SucursalID,
+            NombreSucursal: u.NombreSucursal,
+        }));
+    }
+
     // CUADRAR CAJA GENERAL
     // CUADRAR CAJA GENERAL
     async cuadrarCajaGeneral(dto: CuadrarCajaGeneralDto): Promise<CajaGeneral> {
@@ -599,6 +731,32 @@ export class CajaGeneralService {
                 HttpStatus.NOT_FOUND,
             );
         }
+
+        // 🔍 VALIDACIÓN CRÍTICA FASE 1: Usuarios con movimientos sin corte CERRADO
+        console.log('🔍 ===== VALIDANDO PREREQUISITOS PARA CUADRE DE CAJA GENERAL =====');
+        const usuariosSinCorte = await this.getUsuariosConMovimientosSinCorteGlobal(fecha);
+
+        if (usuariosSinCorte.length > 0) {
+            // Agrupar por sucursal para mensaje más claro
+            const porSucursal = usuariosSinCorte.reduce((acc, u) => {
+                const sucursal = u.NombreSucursal || 'Sin sucursal';
+                if (!acc[sucursal]) acc[sucursal] = [];
+                acc[sucursal].push(`${u.Nombre} (ID: ${u.UsuarioID})`);
+                return acc;
+            }, {} as Record<string, string[]>);
+
+            const mensaje = Object.entries(porSucursal)
+                .map(([sucursal, usuarios]) => `\n  • ${sucursal}: ${usuarios.join(', ')}`)
+                .join('');
+
+            throw new HttpException(
+                `❌ No se puede cuadrar Caja General: Existen ${usuariosSinCorte.length} usuario(s) con movimientos SIN corte CERRADO del día ${fecha}:${mensaje}\n\n` +
+                `ACCIÓN REQUERIDA: Todos los usuarios con movimientos deben tener su corte de caja CERRADO antes de cuadrar la Caja General.`,
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        console.log('✅ Validación exitosa: Todos los usuarios con movimientos tienen corte cerrado');
 
         const saldoCalculado = dashboard.preCuadre.saldoCalculado;
         const saldoRealUsado =

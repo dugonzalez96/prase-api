@@ -538,10 +538,12 @@ export class CortesUsuariosService {
 
 
   async generarCorteCaja(usuarioID: number): Promise<GenerateCorteUsuarioDto> {
+    // 🔍 ARRASTRE DE SALDOS: Buscar último corte CERRADO (no Cancelado, no Pendiente)
+    // Esto permite múltiples cortes en un día - cada corte calcula desde el anterior
     const ultimoCorte = await this.cortesUsuariosRepository.findOne({
       where: {
         usuarioID: { UsuarioID: usuarioID },
-        Estatus: Not('Cancelado'),
+        Estatus: 'Cerrado',
       },
       order: { FechaCorte: 'DESC' },
     });

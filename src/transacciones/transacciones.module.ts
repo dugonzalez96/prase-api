@@ -11,11 +11,25 @@ import { BitacoraEliminacionesModule } from 'src/bitacora-eliminaciones/bitacora
 import { BitacoraEdiciones } from 'src/bitacora-ediciones/bitacora-ediciones.entity';
 import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.entity';
 import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
+import { CajaChica } from 'src/caja-chica/entities/caja-chica.entity';
+import { CajaGeneral } from 'src/caja-general/entities/caja-general.entity';
+import { CortesUsuarios } from 'src/corte-caja/entities/cortes-usuarios.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature(
-      [Transacciones, IniciosCaja, usuarios, CuentasBancarias,BitacoraEdiciones, BitacoraEliminaciones,Sucursal],
+      [
+        Transacciones,
+        IniciosCaja,
+        usuarios,
+        CuentasBancarias,
+        BitacoraEdiciones,
+        BitacoraEliminaciones,
+        Sucursal,
+        CajaChica, // 🔹 FASE 2: Para validar cuadres cerrados
+        CajaGeneral, // 🔹 FASE 2: Para validar cuadres cerrados
+        CortesUsuarios, // 🔹 FASE 3: Para validar inmutabilidad
+      ],
       'db1',
     ),
     forwardRef(() => BitacoraEdicionesModule),
