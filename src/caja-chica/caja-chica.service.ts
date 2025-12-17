@@ -599,7 +599,8 @@ export class CajaChicaService {
 
         // 💵 DIFERENCIA SOLO DE EFECTIVO: Comparar efectivo real vs efectivo esperado
         // (antes comparaba suma total vs efectivo esperado, lo cual estaba incorrecto)
-        const Diferencia = TotalEfectivoCapturadoNumerico - SaldoEsperado;
+        // ✅ CORRECCIÓN P7: Redondear diferencia a 2 decimales para evitar problemas de precisión
+        const Diferencia = Number((TotalEfectivoCapturadoNumerico - SaldoEsperado).toFixed(2));
 
         // ✅ VALIDACIÓN 3: Diferencia significativa requiere observaciones
         if (Math.abs(Diferencia) > 0.01) { // Tolerancia de 1 centavo por redondeo

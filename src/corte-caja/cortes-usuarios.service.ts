@@ -1124,7 +1124,8 @@ export class CortesUsuariosService {
 
     // 💵 DIFERENCIA SOLO DE EFECTIVO: Comparar efectivo real vs efectivo esperado
     // (antes comparaba suma total vs efectivo esperado, lo cual estaba incorrecto)
-    const diferencia = totalEfectivoCapturado - corteCalculado.SaldoEsperado;
+    // ✅ CORRECCIÓN P7: Redondear diferencia a 2 decimales para evitar problemas de precisión
+    const diferencia = Number((totalEfectivoCapturado - corteCalculado.SaldoEsperado).toFixed(2));
 
     // ✅ VALIDACIÓN 4: Advertencia de diferencia significativa
     if (Math.abs(diferencia) > 0.01) { // Tolerancia de 1 centavo por redondeo

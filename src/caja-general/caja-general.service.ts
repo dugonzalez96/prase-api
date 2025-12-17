@@ -134,9 +134,11 @@ export class CajaGeneralService {
         const entradasTransaccionesIngreso: MovimientoTimelineDto[] = [];
 
         cajasChica.forEach((cc) => {
-            // 💵 SOLO EFECTIVO: El monto de entrega de caja chica debe ser solo efectivo físico
-            // Tarjeta y transferencia están en el banco, no en caja física
-            const montoEntrega = Number(cc.TotalEfectivo || 0);
+            // 💵 ✅ CORRECCIÓN: Usar TotalEfectivoCapturado en lugar de TotalEfectivo
+            // TotalEfectivoCapturado = efectivo físico que el usuario entregó en el cuadre
+            // TotalEfectivo = cálculo automático que puede incluir otros conceptos
+            // Tarjeta y transferencia están en el banco, NO en caja física
+            const montoEntrega = Number(cc.TotalEfectivoCapturado || 0);
 
             const mov: MovimientoTimelineDto = {
                 hora: cc.FechaCierre
@@ -179,17 +181,19 @@ export class CajaGeneralService {
             entradasPagosPoliza.push(mov);
         });
 
-        // 2.3 Transacciones ingreso general
+        // 2.3 Transacciones ingreso general - ✅ CORRECCIÓN: SOLO EFECTIVO
+        // Caja general maneja solo efectivo físico. Tarjeta/transferencia van al banco.
         const transIngresos = await this.transaccionesRepo
             .createQueryBuilder('t')
             .leftJoinAndSelect('t.CuentaBancaria', 'cuenta')
             .where("DATE(CONVERT_TZ(t.FechaTransaccion, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere('t.TipoTransaccion = :tipo', { tipo: 'Ingreso' })
             .andWhere('t.EsGeneral = :esGeneral', { esGeneral: true })
+            .andWhere('t.FormaPago = :formaPago', { formaPago: 'Efectivo' })
             .orderBy('t.FechaTransaccion', 'ASC')
             .getMany();
 
-        console.log('📊 Transacciones ingreso encontradas:', transIngresos.length);
+        console.log('📊 Transacciones ingreso (SOLO EFECTIVO) encontradas:', transIngresos.length);
 
         transIngresos.forEach((t) => {
             const mov: MovimientoTimelineDto = {
@@ -206,11 +210,14 @@ export class CajaGeneralService {
             entradasTransaccionesIngreso.push(mov);
         });
 
-        const totalEntradas =
+        // ✅ CORRECCIÓN P7: Redondear a 2 decimales para evitar problemas de precisión
+        const totalEntradas = Number((
             entradasCortesCajaChica.reduce((acc, mov) => acc + mov.monto, 0) +
-            entradasTransaccionesIngreso.reduce((acc, mov) => acc + mov.monto, 0);
+            entradasTransaccionesIngreso.reduce((acc, mov) => acc + mov.monto, 0)
+        ).toFixed(2));
 
-        // 3) EGRESOS
+        // 3) EGRESOS - ✅ CORRECCIÓN: SOLO EFECTIVO
+        // Caja general maneja solo efectivo físico. Tarjeta/transferencia van al banco.
         const egresosTimeline: MovimientoTimelineDto[] = [];
         const egresosTransacciones: MovimientoTimelineDto[] = [];
 
@@ -220,10 +227,11 @@ export class CajaGeneralService {
             .where("DATE(CONVERT_TZ(t.FechaTransaccion, '+00:00', :timezone)) = :fecha", { fecha, timezone })
             .andWhere('t.TipoTransaccion = :tipo', { tipo: 'Egreso' })
             .andWhere('t.EsGeneral = :esGeneral', { esGeneral: true })
+            .andWhere('t.FormaPago = :formaPago', { formaPago: 'Efectivo' })
             .orderBy('t.FechaTransaccion', 'ASC')
             .getMany();
 
-        console.log('📊 Transacciones egreso encontradas:', transEgresos.length);
+        console.log('📊 Transacciones egreso (SOLO EFECTIVO) encontradas:', transEgresos.length);
 
         transEgresos.forEach((t) => {
             const mov: MovimientoTimelineDto = {
@@ -239,12 +247,14 @@ export class CajaGeneralService {
             egresosTransacciones.push(mov);
         });
 
-        const totalEgresos = egresosTimeline.reduce(
+        // ✅ CORRECCIÓN P7: Redondear a 2 decimales
+        const totalEgresos = Number(egresosTimeline.reduce(
             (acc, mov) => acc + mov.monto,
             0,
-        );
+        ).toFixed(2));
 
-        const saldoCalculado = saldoInicial + totalEntradas - totalEgresos;
+        // ✅ CORRECCIÓN P7: Redondear saldo calculado a 2 decimales
+        const saldoCalculado = Number((saldoInicial + totalEntradas - totalEgresos).toFixed(2));
         const diferencia = 0;
 
         let estadoCuadre: 'PRE_CUADRE' | 'CUADRADO' | 'CON_DIFERENCIA' = 'PRE_CUADRE';
@@ -765,17 +775,18 @@ export class CajaGeneralService {
         // 💵 DIFERENCIA SOLO DE EFECTIVO: Comparar efectivo real vs efectivo esperado
         // Si se proporciona totalEfectivoCapturado, usarlo; sino, usar saldoRealUsado (por compatibilidad)
         const efectivoCapturado = typeof totalEfectivoCapturado === 'number' ? totalEfectivoCapturado : saldoRealUsado;
-        const diferencia = efectivoCapturado - saldoCalculado;
+        // ✅ CORRECCIÓN P7: Redondear diferencia a 2 decimales
+        const diferencia = Number((efectivoCapturado - saldoCalculado).toFixed(2));
 
         // ✅ VALIDACIÓN: Diferencia requiere observaciones
         if (Math.abs(diferencia) > 0.01) { // Tolerancia de 1 centavo por redondeo
             // 🔴 CUALQUIER diferencia requiere observaciones
             if (!observaciones || observaciones.trim().length === 0) {
                 throw new HttpException(
-                    `❌ Se requiere una observación cuando existe diferencia entre efectivo esperado y real. ` +
-                    `Efectivo esperado: $${saldoCalculado.toFixed(2)}, ` +
-                    `Efectivo capturado: $${efectivoCapturado.toFixed(2)}, ` +
-                    `Diferencia: $${diferencia.toFixed(2)}`,
+                    `❌ Si existe diferencia entre el saldo esperado ($${saldoCalculado.toFixed(2)}) ` +
+                    `y el saldo entregado ($${efectivoCapturado.toFixed(2)}), es obligatorio escribir ` +
+                    `un comentario para justificar la diferencia de $${diferencia.toFixed(2)}. ` +
+                    `Por favor, agregue una observación explicando el motivo de la diferencia.`,
                     HttpStatus.BAD_REQUEST,
                 );
             }
@@ -1021,30 +1032,36 @@ export class CajaGeneralService {
     }
 
     /**
-     * @deprecated Use getLocalDayRangeToUTCWithTimezone() instead
-     * Mantener por compatibilidad con código existente
+     * ✅ CORREGIDO: Convertir fecha local a UTC correctamente
+     * Aplica la misma lógica que caja-chica.service.ts
+     *
+     * @param fecha - Fecha en formato YYYY-MM-DD
+     * @returns Rango UTC para búsqueda en BD
      */
     private getLocalDayRangeToUTC(fecha: string, timezone: string = 'America/Mexico_City') {
         // Parsear fecha como LOCAL (sin zona horaria)
-        const [year, month, day] = fecha.split('-').map(Number);
+        const base = fecha ? new Date(fecha) : new Date();
 
-        // Crear fecha en hora local (ignorando UTC)
-        const startLocal = new Date(year, month - 1, day, 0, 0, 0, 0);
-        const endLocal = new Date(year, month - 1, day, 23, 59, 59, 999);
+        const startLocal = new Date(base);
+        startLocal.setHours(0, 0, 0, 0);
+
+        const endLocal = new Date(base);
+        endLocal.setHours(23, 59, 59, 999);
+
+        // ✅ CORRECCIÓN: Restar el offset para convertir correctamente a UTC
+        // getTimezoneOffset() devuelve la diferencia en MINUTOS entre UTC y hora local
+        // Por ejemplo, en México (UTC-6) devuelve 360 minutos
+        const startUTC = new Date(startLocal.getTime() - startLocal.getTimezoneOffset() * 60000);
+        const endUTC = new Date(endLocal.getTime() - endLocal.getTimezoneOffset() * 60000);
 
         console.log('📅 Fecha local interpretada:', {
-            inicio: startLocal.toString(), // Thu Nov 20 2025 00:00:00 GMT-0600
-            fin: endLocal.toString(),       // Thu Nov 20 2025 23:59:59 GMT-0600
+            inicio: startLocal.toString(),
+            fin: endLocal.toString(),
         });
 
-        // Estas fechas YA están en hora local del servidor
-        // Al guardarlas en BD se convertirán automáticamente a UTC
-        const startUTC = startLocal;
-        const endUTC = endLocal;
-
         console.log('🌍 Rango UTC para búsqueda:', {
-            inicio: startUTC.toISOString(), // 2025-11-20T06:00:00.000Z (en México UTC-6)
-            fin: endUTC.toISOString(),       // 2025-11-21T05:59:59.999Z (en México UTC-6)
+            inicio: startUTC.toISOString(),
+            fin: endUTC.toISOString(),
         });
 
         return { startUTC, endUTC };
