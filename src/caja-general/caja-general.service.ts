@@ -92,6 +92,19 @@ export class CajaGeneralService {
         return offset;
     }
 
+    // 🌍 MÉTODO AUXILIAR: Convertir fecha UTC a hora local
+    private convertUTCToLocal(dateUTC: Date, timezoneOffset: string): Date {
+        if (!dateUTC) return dateUTC;
+
+        // Parsear el offset (ej: "-07:00" o "-06:00")
+        const [hours, minutes] = timezoneOffset.split(':').map(Number);
+        const offsetMinutes = hours * 60 + (hours < 0 ? -minutes : minutes);
+
+        // Crear nueva fecha ajustada a hora local
+        const localDate = new Date(dateUTC.getTime() + offsetMinutes * 60000);
+        return localDate;
+    }
+
     // 📊 DASHBOARD COMPLETO (incluye pre-cuadre)
     async getDashboard(dto: GetCajaGeneralDashboardDto) {
         const { fecha, sucursalId } = dto;
@@ -294,12 +307,13 @@ export class CajaGeneralService {
 
         console.log('📊 Cortes usuarios encontrados:', cortesUsuariosRaw.length);
 
+        // ✅ CORRECCIÓN: Convertir fechas UTC a hora local para mostrar correctamente
         const cortesUsuarios = cortesUsuariosRaw.map((c) => ({
             usuario: c.usuarioID?.NombreUsuario || '',
             usuarioId: c.usuarioID?.UsuarioID || null,
             sucursalId: c.Sucursal?.SucursalID ?? null,
             nombreSucursal: c.Sucursal?.NombreSucursal ?? null,
-            fechaHoraCorte: c.FechaCorte,
+            fechaHoraCorte: this.convertUTCToLocal(c.FechaCorte, timezone),
             montoCorte: Number(c.TotalIngresos || 0),
             estadoCajaChica: c.Estatus,
             estadoCajaGeneral: cuadreDelDia ? 'Aplicado' : 'Pendiente',
@@ -317,12 +331,13 @@ export class CajaGeneralService {
 
         console.log('📊 Inicios encontrados:', inicios.length);
 
+        // ✅ CORRECCIÓN: Convertir fechas UTC a hora local para mostrar correctamente
         const iniciosUsuarios = inicios.map((i) => ({
             usuario: i.Usuario?.NombreUsuario || '',
             usuarioId: i.Usuario?.UsuarioID || null,
             sucursalId: i.Sucursal?.SucursalID ?? null,
             nombreSucursal: i.Sucursal?.NombreSucursal ?? null,
-            fechaInicio: i.FechaInicio,
+            fechaInicio: this.convertUTCToLocal(i.FechaInicio, timezone),
             montoInicio: Number(i.MontoInicial || 0),
             estado: i.Estatus,
         }));
@@ -342,10 +357,11 @@ export class CajaGeneralService {
             take: 50,
         });
 
+        // ✅ CORRECCIÓN: Convertir fechas UTC a hora local para mostrar correctamente
         const historialCuadres: HistorialCuadreCajaGeneralDto[] =
             historialRegistros.map((cg) => ({
                 cajaGeneralId: cg.CajaGeneralID,
-                fecha: cg.Fecha,
+                fecha: this.convertUTCToLocal(cg.Fecha, timezone),
                 sucursalId: cg.Sucursal?.SucursalID || null,
                 nombreSucursal: cg.Sucursal?.NombreSucursal || null,
                 saldoInicial: Number(cg.SaldoAnterior || 0),
@@ -860,11 +876,8 @@ export class CajaGeneralService {
 
         const cajaGeneral = new CajaGeneral();
 
-        // ✅ CORRECCIÓN: Guardar la fecha del día actual en hora local (00:00:00)
-        // No usar endUTC porque ya está en el día siguiente en UTC
-        const fechaCuadre = new Date();
-        fechaCuadre.setHours(0, 0, 0, 0);
-        cajaGeneral.Fecha = fechaCuadre;
+        // La fecha se guarda usando CreateDateColumn que usa CURRENT_TIMESTAMP
+        // MySQL la guarda en UTC y las consultas usan CONVERT_TZ para leer en hora local
         cajaGeneral.Sucursal = sucursal || null;
 
         cajaGeneral.SaldoAnterior = dashboard.resumen.saldoInicial;
