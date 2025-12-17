@@ -138,12 +138,15 @@ export class CajaChicaService {
         const usuariosIds = usuariosSucursal.map((u) => u.UsuarioID);
         console.log(`   👥 ${usuariosIds.length} usuarios en la sucursal`);
 
-        // 2️⃣ Buscar usuarios con TRANSACCIONES en la ventana
+        // 2️⃣ Buscar usuarios con TRANSACCIONES DE CAJA CHICA en la ventana
+        // ✅ CORRECCIÓN: Solo contar transacciones de caja chica (EsGeneral = false)
+        // Las transacciones de caja general NO requieren corte de usuario
         const transacciones = await this.transaccionesRepository
             .createQueryBuilder('t')
             .leftJoin('t.UsuarioCreo', 'u')
             .where('u.UsuarioID IN (:...usuariosIds)', { usuariosIds })
             .andWhere('t.FechaTransaccion BETWEEN :desde AND :finDia', { desde, finDia })
+            .andWhere('(t.EsGeneral = :esGeneral OR t.EsGeneral IS NULL)', { esGeneral: false })
             .select('DISTINCT u.UsuarioID', 'UsuarioID')
             .getRawMany();
 

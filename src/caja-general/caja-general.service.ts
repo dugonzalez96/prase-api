@@ -594,12 +594,15 @@ export class CajaGeneralService {
 
         console.log(`   Ventana: ${startUTC.toISOString()} → ${endUTC.toISOString()}`);
 
-        // 2️⃣ Buscar TODOS los usuarios con TRANSACCIONES en el día
+        // 2️⃣ Buscar usuarios con TRANSACCIONES DE CAJA CHICA en el día
+        // ✅ CORRECCIÓN: Solo contar transacciones de caja chica (EsGeneral = false)
+        // Las transacciones de caja general NO requieren corte de usuario
         const transacciones = await this.transaccionesRepo
             .createQueryBuilder('t')
             .leftJoin('t.UsuarioCreo', 'u')
             .leftJoin('u.Sucursal', 's')
             .where('t.FechaTransaccion BETWEEN :startUTC AND :endUTC', { startUTC, endUTC })
+            .andWhere('(t.EsGeneral = :esGeneral OR t.EsGeneral IS NULL)', { esGeneral: false })
             .select('DISTINCT u.UsuarioID', 'UsuarioID')
             .addSelect('u.NombreUsuario', 'NombreUsuario')
             .addSelect('s.SucursalID', 'SucursalID')
@@ -857,8 +860,11 @@ export class CajaGeneralService {
 
         const cajaGeneral = new CajaGeneral();
 
-        // Guarda la fecha del cuadre como el fin del día local en UTC
-        cajaGeneral.Fecha = endUTC;
+        // ✅ CORRECCIÓN: Guardar la fecha del día actual en hora local (00:00:00)
+        // No usar endUTC porque ya está en el día siguiente en UTC
+        const fechaCuadre = new Date();
+        fechaCuadre.setHours(0, 0, 0, 0);
+        cajaGeneral.Fecha = fechaCuadre;
         cajaGeneral.Sucursal = sucursal || null;
 
         cajaGeneral.SaldoAnterior = dashboard.resumen.saldoInicial;
