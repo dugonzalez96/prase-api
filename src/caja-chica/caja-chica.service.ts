@@ -13,6 +13,7 @@ import { IniciosCaja } from 'src/inicios-caja/entities/inicios-caja.entity';
 import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 import { Transacciones } from 'src/transacciones/entities/transacciones.entity';
 import { PagosPoliza } from 'src/pagos-poliza/entities/pagos-poliza.entity';
+import { CajaGeneral } from 'src/caja-general/entities/caja-general.entity';
 
 type EstatusCajaChica = 'Pendiente' | 'Cerrado' | 'Cancelado';
 
@@ -47,6 +48,9 @@ export class CajaChicaService {
 
         @InjectRepository(PagosPoliza, 'db1')
         private readonly pagosPolizaRepository: Repository<PagosPoliza>,
+
+        @InjectRepository(CajaGeneral, 'db1')
+        private readonly cajaGeneralRepository: Repository<CajaGeneral>,
     ) { }
 
     // ============================================================
@@ -837,7 +841,35 @@ export class CajaChicaService {
             );
         }
 
-        // 🔴 NUEVO: validar cortes asociados
+        console.log('🔍 ===== VALIDANDO ELIMINACIÓN DE CUADRE DE CAJA CHICA =====');
+        console.log(`   Caja Chica ID: ${id}`);
+        console.log(`   Usuario: ${usuario}`);
+
+        // 🔴 VALIDACIÓN 1: Verificar si existe caja general asociada
+        const { hoy, finDia } = this.rangoDiaActual();
+
+        const cajaGeneral = await this.cajaGeneralRepository.findOne({
+            where: {
+                Fecha: Between(cuadre.Fecha, finDia),
+                Estatus: In(['Cerrado', 'Pendiente']),
+                Sucursal: { SucursalID: cuadre.Sucursal?.SucursalID },
+            },
+            relations: ['Sucursal'],
+        });
+
+        if (cajaGeneral) {
+            console.log(`   ❌ BLOQUEADO: Existe caja general asociada (ID: ${cajaGeneral.CajaGeneralID})`);
+            throw new HttpException(
+                `❌ No se puede eliminar este cuadre de caja chica porque ya está incluido en un cuadre de caja general ` +
+                `(ID: ${cajaGeneral.CajaGeneralID}, Estatus: ${cajaGeneral.Estatus}). ` +
+                `Para eliminarlo, primero debe eliminar el cuadre de caja general asociado.`,
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        console.log('   ✅ No existe caja general asociada');
+
+        // 🔴 VALIDACIÓN 2: Verificar cortes asociados
         const cortesAsociados = await this.cortesUsuariosRepository.count({
             where: {
                 CajaChica: { CajaChicaID: id },
@@ -845,10 +877,15 @@ export class CajaChicaService {
         });
 
         if (cortesAsociados > 0) {
-            throw new HttpException(
-                `NO PUEDE CANCELARSE PORQUE ESTE CUADRE TIENE CORTES ASOCIADOS (${cortesAsociados}).`,
-                HttpStatus.BAD_REQUEST,
+            console.log(`   ⚠️ ADVERTENCIA: Tiene ${cortesAsociados} cortes asociados que serán desvinculados`);
+
+            // 🔄 BONUS: Actualizar estado de cortes relacionados a 'pendiente'
+            await this.cortesUsuariosRepository.update(
+                { CajaChica: { CajaChicaID: id } },
+                { CajaChica: null },
             );
+
+            console.log(`   ✅ ${cortesAsociados} cortes desvinculados exitosamente`);
         }
 
         // Si llega aquí, NO hay cortes asociados → sí se puede cancelar

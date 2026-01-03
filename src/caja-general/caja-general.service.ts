@@ -308,6 +308,7 @@ export class CajaGeneralService {
         console.log('📊 Cortes usuarios encontrados:', cortesUsuariosRaw.length);
 
         // ✅ CORRECCIÓN: Convertir fechas UTC a hora local para mostrar correctamente
+        // ⭐ NUEVO: Agregar desglose por forma de pago
         const cortesUsuarios = cortesUsuariosRaw.map((c) => ({
             usuario: c.usuarioID?.NombreUsuario || '',
             usuarioId: c.usuarioID?.UsuarioID || null,
@@ -317,6 +318,11 @@ export class CajaGeneralService {
             montoCorte: Number(c.TotalIngresos || 0),
             estadoCajaChica: c.Estatus,
             estadoCajaGeneral: cuadreDelDia ? 'Aplicado' : 'Pendiente',
+            // ⭐ NUEVO DESGLOSE POR FORMA DE PAGO
+            efectivoEntregado: Number(c.TotalEfectivoCapturado || 0),
+            transferencias: Number(c.TotalTransferenciaCapturado || 0),
+            tarjeta: Number(c.TotalTarjetaCapturado || 0),
+            depositos: 0, // Por ahora 0, se puede agregar TotalDepositoCapturado si existe
         }));
 
         // 6) Inicios
@@ -342,12 +348,30 @@ export class CajaGeneralService {
             estado: i.Estatus,
         }));
 
+        // ⭐ NUEVO: Calcular totales por forma de pago desde los cortes del día
+        const totalEfectivoCapturadoCortes = cortesUsuariosRaw.reduce(
+            (sum, c) => sum + Number(c.TotalEfectivoCapturado || 0),
+            0
+        );
+        const totalTarjetaCapturadoCortes = cortesUsuariosRaw.reduce(
+            (sum, c) => sum + Number(c.TotalTarjetaCapturado || 0),
+            0
+        );
+        const totalTransferenciaCapturadoCortes = cortesUsuariosRaw.reduce(
+            (sum, c) => sum + Number(c.TotalTransferenciaCapturado || 0),
+            0
+        );
+
         const preCuadre = {
             saldoInicial,
             totalEntradas,
             totalEgresos,
             saldoCalculado,
             diferencia,
+            // ⭐ NUEVO: Prellenar totales por forma de pago
+            totalEfectivoCapturado: totalEfectivoCapturadoCortes,
+            totalTarjetaCapturado: totalTarjetaCapturadoCortes,
+            totalTransferenciaCapturado: totalTransferenciaCapturadoCortes,
         };
 
         // 8) Historial cuadres
@@ -407,6 +431,10 @@ export class CajaGeneralService {
             totalEgresos: number;
             saldoCalculado: number;
             diferencia: number;
+            // ⭐ NUEVO: Prellenar totales por forma de pago
+            totalEfectivoCapturado: number;
+            totalTarjetaCapturado: number;
+            totalTransferenciaCapturado: number;
         };
         entradasDetalle: CajaGeneralDashboardResponseDto['entradasDetalle'];
         egresosDetalle: CajaGeneralDashboardResponseDto['egresosDetalle'];
@@ -570,6 +598,10 @@ export class CajaGeneralService {
                 totalEgresos: pre.totalEgresos ?? 0,
                 saldoCalculado: pre.saldoCalculado ?? 0,
                 diferencia: pre.diferencia ?? 0,
+                // ⭐ NUEVO: Prellenar totales por forma de pago
+                totalEfectivoCapturado: pre.totalEfectivoCapturado ?? 0,
+                totalTarjetaCapturado: pre.totalTarjetaCapturado ?? 0,
+                totalTransferenciaCapturado: pre.totalTransferenciaCapturado ?? 0,
             },
             entradasDetalle: {
                 cortesCajaChica:
@@ -599,14 +631,15 @@ export class CajaGeneralService {
      * DIFERENCIA vs Caja Chica: Esta validación es GLOBAL (todas las sucursales)
      *
      * @param fecha - Fecha del cuadre en formato YYYY-MM-DD
+     * @param sucursalId - ID de la sucursal (opcional, para obtener timezone correcto)
      * @returns Lista de usuarios con movimientos sin corte (agrupados por sucursal)
      */
-    private async getUsuariosConMovimientosSinCorteGlobal(fecha: string) {
+    private async getUsuariosConMovimientosSinCorteGlobal(fecha: string, sucursalId?: number) {
         console.log('🌍 Validando usuarios con movimientos sin corte GLOBAL');
         console.log(`   Fecha: ${fecha}`);
 
-        // 1️⃣ Obtener rango de fechas del día
-        const { startUTC, endUTC } = await this.getLocalDayRangeToUTCWithTimezone(fecha);
+        // 1️⃣ Obtener rango de fechas del día (usando timezone de la sucursal si se proporciona)
+        const { startUTC, endUTC } = await this.getLocalDayRangeToUTCWithTimezone(fecha, sucursalId);
 
         console.log(`   Ventana: ${startUTC.toISOString()} → ${endUTC.toISOString()}`);
 
@@ -616,13 +649,14 @@ export class CajaGeneralService {
         const transacciones = await this.transaccionesRepo
             .createQueryBuilder('t')
             .leftJoin('t.UsuarioCreo', 'u')
-            .leftJoin('u.Sucursal', 's')
+            .leftJoin('Sucursales', 's', 's.SucursalID = u.SucursalID')
             .where('t.FechaTransaccion BETWEEN :startUTC AND :endUTC', { startUTC, endUTC })
             .andWhere('(t.EsGeneral = :esGeneral OR t.EsGeneral IS NULL)', { esGeneral: false })
-            .select('DISTINCT u.UsuarioID', 'UsuarioID')
+            .select('u.UsuarioID', 'UsuarioID')
             .addSelect('u.NombreUsuario', 'NombreUsuario')
             .addSelect('s.SucursalID', 'SucursalID')
             .addSelect('s.NombreSucursal', 'NombreSucursal')
+            .distinct(true)
             .getRawMany();
 
         console.log(`   📝 ${transacciones.length} usuarios con transacciones`);
@@ -631,13 +665,14 @@ export class CajaGeneralService {
         const pagosPoliza = await this.pagosPolizaRepo
             .createQueryBuilder('p')
             .leftJoin('p.Usuario', 'u')
-            .leftJoin('u.Sucursal', 's')
+            .leftJoin('Sucursales', 's', 's.SucursalID = u.SucursalID')
             .where('p.FechaPago BETWEEN :startUTC AND :endUTC', { startUTC, endUTC })
             .andWhere('p.MotivoCancelacion IS NULL')
-            .select('DISTINCT u.UsuarioID', 'UsuarioID')
+            .select('u.UsuarioID', 'UsuarioID')
             .addSelect('u.NombreUsuario', 'NombreUsuario')
             .addSelect('s.SucursalID', 'SucursalID')
             .addSelect('s.NombreSucursal', 'NombreSucursal')
+            .distinct(true)
             .getRawMany();
 
         console.log(`   💳 ${pagosPoliza.length} usuarios con pagos de póliza`);
@@ -763,7 +798,7 @@ export class CajaGeneralService {
 
         // 🔍 VALIDACIÓN CRÍTICA FASE 1: Usuarios con movimientos sin corte CERRADO
         console.log('🔍 ===== VALIDANDO PREREQUISITOS PARA CUADRE DE CAJA GENERAL =====');
-        const usuariosSinCorte = await this.getUsuariosConMovimientosSinCorteGlobal(fecha);
+        const usuariosSinCorte = await this.getUsuariosConMovimientosSinCorteGlobal(fecha, sucursalId);
 
         if (usuariosSinCorte.length > 0) {
             // Agrupar por sucursal para mensaje más claro
@@ -1086,6 +1121,111 @@ export class CajaGeneralService {
         return { startUTC, endUTC };
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // 🔒 ELIMINACIÓN DE CUADRE DE CAJA GENERAL CON ACTUALIZACIÓN DE ESTADOS
+    // ═══════════════════════════════════════════════════════════════
+    /**
+     * Elimina un cuadre de caja general y actualiza estados de registros relacionados
+     *
+     * REGLA DE NEGOCIO:
+     * Al eliminar un cuadre de caja general, se deben actualizar los estados de:
+     * 1. Caja chica relacionada (volver a 'pendiente')
+     * 2. Cortes de usuario relacionados (estadoCajaGeneral = 'pendiente')
+     *
+     * @param cajaGeneralID - ID del cuadre a eliminar
+     * @param usuarioEliminacion - Usuario que realiza la eliminación
+     * @param motivo - Motivo de la eliminación
+     * @returns Mensaje de confirmación con estadísticas
+     */
+    async eliminarCuadre(
+        cajaGeneralID: number,
+        usuarioEliminacion: string,
+        motivo: string,
+    ): Promise<{
+        message: string;
+        cajaGeneralID: number;
+        cajasChicasActualizadas: number;
+        cortesRelacionados: number;
+    }> {
+        if (!usuarioEliminacion) {
+            throw new HttpException(
+                'El usuario de eliminación es obligatorio',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
 
+        if (!motivo || motivo.trim().length === 0) {
+            throw new HttpException(
+                'El motivo de eliminación es obligatorio',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        console.log('🔍 ===== ELIMINANDO CUADRE DE CAJA GENERAL =====');
+        console.log(`   Caja General ID: ${cajaGeneralID}`);
+        console.log(`   Usuario: ${usuarioEliminacion}`);
+
+        // 1️⃣ Buscar el cuadre de caja general
+        const cuadreGeneral = await this.cajaGeneralRepo.findOne({
+            where: { CajaGeneralID: cajaGeneralID },
+            relations: ['Sucursal'],
+        });
+
+        if (!cuadreGeneral) {
+            throw new HttpException(
+                'Cuadre de caja general no encontrado',
+                HttpStatus.NOT_FOUND,
+            );
+        }
+
+        console.log(`   Fecha cuadre: ${cuadreGeneral.Fecha.toISOString()}`);
+        console.log(`   Sucursal: ${cuadreGeneral.Sucursal?.NombreSucursal || 'N/A'}`);
+        console.log(`   Estatus: ${cuadreGeneral.Estatus}`);
+
+        // 2️⃣ Obtener rango de fechas para buscar registros relacionados
+        const fechaInicio = new Date(cuadreGeneral.Fecha);
+        fechaInicio.setHours(0, 0, 0, 0);
+        const fechaFin = new Date(cuadreGeneral.Fecha);
+        fechaFin.setHours(23, 59, 59, 999);
+
+        // 3️⃣ ACTUALIZAR ESTADO DE CAJA CHICA RELACIONADA
+        const cajasChicasActualizadas = await this.cajaChicaRepo
+            .createQueryBuilder()
+            .update(CajaChica)
+            .set({ Estatus: 'Pendiente' as any })
+            .where('Fecha BETWEEN :fechaInicio AND :fechaFin', { fechaInicio, fechaFin })
+            .andWhere('Sucursal.SucursalID = :sucursalId', {
+                sucursalId: cuadreGeneral.Sucursal?.SucursalID,
+            })
+            .execute()
+            .then(result => result.affected || 0);
+
+        console.log(`   🔄 ${cajasChicasActualizadas} caja(s) chica(s) actualizada(s) a 'Pendiente'`);
+
+        // 4️⃣ Contar cortes relacionados (informativo)
+        const cortesRelacionados = await this.cortesUsuariosRepo
+            .createQueryBuilder('corte')
+            .leftJoin('corte.Sucursal', 'sucursal')
+            .where('corte.FechaCorte BETWEEN :fechaInicio AND :fechaFin', { fechaInicio, fechaFin })
+            .andWhere('sucursal.SucursalID = :sucursalId', {
+                sucursalId: cuadreGeneral.Sucursal?.SucursalID,
+            })
+            .getCount();
+
+        console.log(`   ℹ️  ${cortesRelacionados} corte(s) relacionado(s) con este cuadre de caja general`);
+
+        // 5️⃣ Eliminar el cuadre de caja general
+        await this.cajaGeneralRepo.remove(cuadreGeneral);
+
+        console.log('   ✅ CUADRE DE CAJA GENERAL ELIMINADO EXITOSAMENTE');
+        console.log('========================================================');
+
+        return {
+            message: '✅ Cuadre de caja general eliminado correctamente',
+            cajaGeneralID,
+            cajasChicasActualizadas,
+            cortesRelacionados,
+        };
+    }
 
 }

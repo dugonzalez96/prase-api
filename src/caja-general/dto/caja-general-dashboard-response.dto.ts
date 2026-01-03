@@ -71,6 +71,11 @@ export interface CajaGeneralDashboardResponseDto {
     montoCorte: number;
     estadoCajaChica: string;
     estadoCajaGeneral: string;
+    // ⭐ NUEVO DESGLOSE POR FORMA DE PAGO
+    efectivoEntregado: number;
+    transferencias: number;
+    tarjeta: number;
+    depositos: number;
   }[];
 
   // Sección 5: Inicios de usuario
@@ -91,6 +96,10 @@ export interface CajaGeneralDashboardResponseDto {
     totalEgresos: number;
     saldoCalculado: number;
     diferencia: number; // SIEMPRE 0 en backend (lo calcula el front)
+    // ⭐ NUEVO: Prellenar totales por forma de pago
+    totalEfectivoCapturado?: number;
+    totalTarjetaCapturado?: number;
+    totalTransferenciaCapturado?: number;
   };
 
   // Sección 7: Historial de cuadres

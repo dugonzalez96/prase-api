@@ -1283,4 +1283,121 @@ export class CortesUsuariosService {
     return corteGuardado;
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 🔒 VALIDACIÓN DE INTEGRIDAD: ELIMINAR CORTE DE USUARIO
+  // ═══════════════════════════════════════════════════════════════
+  /**
+   * Elimina un corte de usuario con validaciones de integridad
+   *
+   * REGLA DE NEGOCIO:
+   * No se puede eliminar un corte de usuario si:
+   * 1. El corte ya está cerrado (Estatus = 'Cerrado')
+   * 2. El corte ya está incluido en un cuadre de caja chica (tiene CajaChica asociada)
+   *
+   * @param corteID - ID del corte a eliminar
+   * @param usuarioEliminacion - Usuario que realiza la eliminación
+   * @param motivo - Motivo de la eliminación
+   * @returns Mensaje de confirmación
+   */
+  async eliminarCorte(
+    corteID: number,
+    usuarioEliminacion: string,
+    motivo: string,
+  ): Promise<{ message: string; corteID: number }> {
+    if (!usuarioEliminacion) {
+      throw new HttpException(
+        'El usuario de eliminación es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!motivo || motivo.trim().length === 0) {
+      throw new HttpException(
+        'El motivo de eliminación es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    console.log('🔍 ===== VALIDANDO ELIMINACIÓN DE CORTE DE USUARIO =====');
+    console.log(`   Corte ID: ${corteID}`);
+    console.log(`   Usuario: ${usuarioEliminacion}`);
+
+    // 1️⃣ Buscar el corte con sus relaciones
+    const corte = await this.cortesUsuariosRepository.findOne({
+      where: { CorteUsuarioID: corteID },
+      relations: ['usuarioID', 'InicioCaja', 'CajaChica'],
+    });
+
+    if (!corte) {
+      throw new HttpException(
+        'Corte de caja no encontrado',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    console.log(`   Usuario del corte: ${corte.usuarioID?.NombreUsuario || 'N/A'}`);
+    console.log(`   Fecha corte: ${corte.FechaCorte.toISOString()}`);
+    console.log(`   Estatus: ${corte.Estatus}`);
+
+    // 2️⃣ VALIDACIÓN CRÍTICA: Verificar si el corte está cerrado
+    if (corte.Estatus === 'Cerrado') {
+      console.log('   ❌ BLOQUEADO: El corte está cerrado');
+      throw new HttpException(
+        `❌ No se puede eliminar este corte de caja porque ya está cerrado. ` +
+        `Los cortes cerrados son inmutables para mantener la integridad del sistema. ` +
+        `Si necesita realizar cambios, contacte al administrador.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    console.log('   ✅ El corte no está cerrado');
+
+    // 3️⃣ VALIDACIÓN CRÍTICA: Verificar si tiene cuadre de caja chica asociado
+    if (corte.CajaChica) {
+      console.log(`   ❌ BLOQUEADO: Tiene caja chica asociada (ID: ${corte.CajaChica.CajaChicaID})`);
+      throw new HttpException(
+        `❌ No se puede eliminar este corte de caja porque ya está incluido en un cuadre de caja chica ` +
+        `(ID: ${corte.CajaChica.CajaChicaID}). ` +
+        `Para eliminarlo, primero debe eliminar el cuadre de caja chica asociado.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    console.log('   ✅ El corte no tiene caja chica asociada');
+
+    // 4️⃣ Si el corte tenía un inicio de caja asociado, reactivarlo
+    if (corte.InicioCaja) {
+      console.log(`   🔄 Reactivando inicio de caja (ID: ${corte.InicioCaja.InicioCajaID})`);
+
+      await this.iniciosCajaRepository.update(
+        { InicioCajaID: corte.InicioCaja.InicioCajaID },
+        { Estatus: 'Activo' },
+      );
+
+      console.log('   ✅ Inicio de caja reactivado');
+    }
+
+    // 5️⃣ Registrar en bitácora antes de eliminar
+    await this.bitacoraEliminacionesRepository.save(
+      this.bitacoraEliminacionesRepository.create({
+        Entidad: 'CortesUsuarios',
+        EntidadID: corteID,
+        FechaEliminacion: new Date(),
+        UsuarioEliminacion: usuarioEliminacion,
+        MotivoEliminacion: motivo,
+      }),
+    );
+
+    // 6️⃣ Eliminar el corte
+    await this.cortesUsuariosRepository.remove(corte);
+
+    console.log('   ✅ CORTE ELIMINADO EXITOSAMENTE');
+    console.log('========================================================');
+
+    return {
+      message: `Corte de caja eliminado correctamente`,
+      corteID,
+    };
+  }
+
 }
