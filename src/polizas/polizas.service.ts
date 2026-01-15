@@ -14,6 +14,11 @@ import { Clientes } from 'src/clientes/clientes.entity';
 import { Vehiculos } from 'src/vehiculos/vehiculos.entity';
 import { PagosPoliza } from 'src/pagos-poliza/entities/pagos-poliza.entity';
 import * as validator from 'validator'; // Usar la biblioteca 'validator' para sanitizar
+import {
+  ESTADOS_POLIZA,
+  ESTADOS_VIGENTES,
+  ESTADOS_VALIDOS_UPDATE,
+} from './polizas.constants';
 
 @Injectable()
 export class PolizasService {
@@ -102,7 +107,13 @@ export class PolizasService {
     // Asignar el resto de los datos de la póliza
     Object.assign(poliza, polizaData);
     poliza.VersionActual = 1.0; // Inicializar la versión
-    poliza.EstadoPoliza = 'PERIODO DE GRACIA'; // Estado inicial de la póliza
+
+    // Determinar estado inicial según período de gracia de la cotización
+    if (poliza.cotizacion?.PeriodoGracia === 0) {
+      poliza.EstadoPoliza = ESTADOS_POLIZA.PAGO_INMEDIATO;
+    } else {
+      poliza.EstadoPoliza = ESTADOS_POLIZA.PERIODO_GRACIA;
+    }
 
     console.log(tipoPagoDescripcion);
     // Generar folio de la póliza
@@ -162,12 +173,10 @@ export class PolizasService {
     // Validar que el nuevo estado sea válido
     if (
       updatePolizaDto.EstadoPoliza &&
-      !['ACTIVA', 'PENDIENTE', 'PERIODO DE GRACIA'].includes(
-        updatePolizaDto.EstadoPoliza,
-      )
+      !ESTADOS_VALIDOS_UPDATE.includes(updatePolizaDto.EstadoPoliza as any)
     ) {
       throw new HttpException(
-        'Estado de póliza no válido. Debe ser ACTIVA,PENDIENTE O EN PERIODO DE GRACIA',
+        'Estado de póliza no válido. Debe ser ACTIVA, PENDIENTE, PERIODO DE GRACIA o PAGO INMEDIATO',
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -576,7 +585,8 @@ export class PolizasService {
 
     if (!poliza) throw new HttpException('Póliza no encontrada', HttpStatus.NOT_FOUND);
 
-    if (poliza.EstadoPoliza !== 'PERIODO DE GRACIA' && poliza.EstadoPoliza !== 'ACTIVA') {
+    // Validar que la póliza esté en estado vigente (permite PAGO INMEDIATO, PERIODO DE GRACIA o ACTIVA)
+    if (!ESTADOS_VIGENTES.includes(poliza.EstadoPoliza as any)) {
       throw new HttpException(
         'La póliza no está activa y no se puede generar el esquema de pagos',
         HttpStatus.BAD_REQUEST,
@@ -601,9 +611,13 @@ export class PolizasService {
       );
     }
 
-    // 2) Periodo de gracia (mensaje)
+    // 2) Periodo de gracia o pago inmediato (mensaje)
     let mensajeAtraso: string | null = null;
-    if (poliza.EstadoPoliza === 'PERIODO DE GRACIA') {
+
+    // Verificar si la póliza requiere pago inmediato
+    if (poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO) {
+      mensajeAtraso = 'Esta póliza requiere PAGO INMEDIATO para activarse. No se ha realizado el primer pago.';
+    } else if (poliza.EstadoPoliza === ESTADOS_POLIZA.PERIODO_GRACIA) {
       const fechaInicioPoliza = new Date(poliza.FechaInicio);
       const fechaLimiteGracia = new Date(fechaInicioPoliza);
       fechaLimiteGracia.setDate(fechaLimiteGracia.getDate() + periodoGracia);
@@ -627,9 +641,18 @@ export class PolizasService {
     const pagosSubsecuentes = numeroPagos > 1 ? round2((primaTotal - primerPago) / (numeroPagos - 1)) : round2(primaTotal);
 
     // 4) Construcción de fechas objetivo (usa tu frecuencia: 12/numeroPagos meses)
-    let fechaPago = new Date(poliza.FechaEmision);
-    fechaPago.setDate(fechaPago.getDate() + periodoGracia);
-    fechaPago = new Date(fechaPago.getFullYear(), fechaPago.getMonth(), fechaPago.getDate(), 0, 0, 0, 0);
+    let fechaPago: Date;
+
+    // Si la póliza es de PAGO INMEDIATO, el primer abono vence inmediatamente (fecha actual)
+    if (poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO || periodoGracia === 0) {
+      fechaPago = new Date();
+      fechaPago = new Date(fechaPago.getFullYear(), fechaPago.getMonth(), fechaPago.getDate(), 0, 0, 0, 0);
+    } else {
+      // Aplicar el período de gracia normal
+      fechaPago = new Date(poliza.FechaEmision);
+      fechaPago.setDate(fechaPago.getDate() + periodoGracia);
+      fechaPago = new Date(fechaPago.getFullYear(), fechaPago.getMonth(), fechaPago.getDate(), 0, 0, 0, 0);
+    }
 
     const fechas: Date[] = [];
     for (let i = 0; i < numeroPagos; i++) {
@@ -875,5 +898,49 @@ export class PolizasService {
     const consecutivo = String(count + 1).padStart(5, '0');
 
     return `P${inicialTipoPago}${año}${mes}${dia}${consecutivo}`;
+  }
+
+  // ===============================================================
+  // HELPERS PRIVADOS - NO EXPONER EN CONTROLADOR
+  // ===============================================================
+
+  /**
+   * Verifica si una póliza requiere pago inmediato
+   * @private - NO exponer en controlador
+   */
+  private requierePagoInmediato(poliza: Poliza): boolean {
+    return (
+      poliza.cotizacion?.PeriodoGracia === 0 ||
+      poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO
+    );
+  }
+
+  /**
+   * Verifica si una póliza está en estado vigente (puede operar)
+   * Usar para validaciones de consulta/lectura
+   * @private - NO exponer en controlador
+   */
+  private estaVigente(poliza: Poliza): boolean {
+    return ESTADOS_VIGENTES.includes(poliza.EstadoPoliza as any);
+  }
+
+  /**
+   * Verifica si una póliza puede ser modificada (solo activas)
+   * Usar para validaciones de escritura/modificación
+   * @private - NO exponer en controlador
+   */
+  private puedeModificarse(poliza: Poliza): boolean {
+    return poliza.EstadoPoliza === ESTADOS_POLIZA.ACTIVA;
+  }
+
+  /**
+   * Verifica si la póliza requiere completar el primer pago para activarse
+   * @private - NO exponer en controlador
+   */
+  private requierePrimerPago(poliza: Poliza): boolean {
+    return (
+      poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO ||
+      poliza.EstadoPoliza === ESTADOS_POLIZA.PERIODO_GRACIA
+    );
   }
 }

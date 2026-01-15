@@ -13,6 +13,10 @@ import { BitacoraEliminaciones } from 'src/bitacora-eliminaciones/bitacora-elimi
 import { usuarios } from 'src/users/users.entity';
 import { Poliza } from 'src/polizas/entities/poliza.entity';
 import { CuentasBancarias } from 'src/cuentas-bancarias/entities/cuentas-bancarias.entity';
+import {
+  ESTADOS_POLIZA,
+  ESTADOS_REQUIEREN_PRIMER_PAGO,
+} from 'src/polizas/polizas.constants';
 
 @Injectable()
 export class PagosPolizaService {
@@ -148,6 +152,19 @@ export class PagosPolizaService {
       );
     }
 
+    // Validación especial para pólizas de PAGO INMEDIATO
+    if (EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO && pagosRealizados.length === 0) {
+      // Para el primer pago en pólizas de PAGO INMEDIATO, validar monto mínimo
+      const primerAbono = await this.calcularPrimerAbono(poliza);
+
+      if (primerAbono > 0 && MontoPagado < primerAbono) {
+        throw new HttpException(
+          `Esta póliza requiere PAGO INMEDIATO. El primer pago debe ser de al menos ${primerAbono.toFixed(2)} MXN`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    }
+
     const usuarioValido = createDto.UsuarioValidoID
       ? await this.usuariosRepository.findOne({
         where: { UsuarioID: createDto.UsuarioValidoID },
@@ -213,9 +230,12 @@ export class PagosPolizaService {
     // Incrementar TotalPagos en la póliza
     await this.incrementarTotalPagos(PolizaID);
 
-    // Si es el primer pago y el estado de la póliza es "PERIODO DE GRACIA", cambiar a "ACTIVA"
-    if (pagosRealizados.length === 0 && EstadoPoliza === 'PERIODO DE GRACIA') {
-      poliza.EstadoPoliza = 'ACTIVA';
+    // Si es el primer pago y la póliza está en PERIODO DE GRACIA o PAGO INMEDIATO, cambiar a ACTIVA
+    if (
+      pagosRealizados.length === 0 &&
+      ESTADOS_REQUIEREN_PRIMER_PAGO.includes(EstadoPoliza as any)
+    ) {
+      poliza.EstadoPoliza = ESTADOS_POLIZA.ACTIVA;
       await this.polizasRepository.save(poliza);
     }
 
@@ -504,5 +524,40 @@ export class PagosPolizaService {
     qb.orderBy('p.FechaMovimiento', 'DESC');
 
     return qb.getMany();
+  }
+
+  // ===============================================================
+  // HELPERS PRIVADOS - NO EXPONER EN CONTROLADOR
+  // ===============================================================
+
+  /**
+   * Calcula el monto del primer abono para una póliza
+   * Usa la misma fórmula que generarEsquemaPagos en polizas.service.ts
+   * @private - NO exponer en controlador
+   */
+  private async calcularPrimerAbono(poliza: Poliza): Promise<number> {
+    // Obtener la póliza con sus relaciones necesarias
+    const polizaCompleta = await this.polizasRepository.findOne({
+      where: { PolizaID: poliza.PolizaID },
+      relations: ['tipoPago', 'cotizacion'],
+    });
+
+    if (!polizaCompleta) {
+      return 0;
+    }
+
+    const numeroPagos = Number(polizaCompleta.NumeroPagos) || 1;
+    const totalSinIVA = Number(polizaCompleta.TotalSinIVA) || 0;
+    const derechoPolizaAplicado = Number(polizaCompleta.DerechoPolizaAplicado) || 0;
+    const porcentajeAjuste = Number(polizaCompleta.tipoPago?.PorcentajeAjuste) || 0;
+
+    // Fórmula: ((TotalSinIVA / NumeroPagos) + DerechoPoliza) * (1 + PorcentajeAjuste/100) * 1.16
+    const ajusteDecimal = 1 + porcentajeAjuste / 100;
+    const totalPorPago = totalSinIVA / numeroPagos;
+    const totalConDerechoPoliza = totalPorPago + derechoPolizaAplicado;
+    const totalConAjuste = totalConDerechoPoliza * ajusteDecimal;
+    const totalConIVA = totalConAjuste * 1.16;
+
+    return Math.round((totalConIVA + Number.EPSILON) * 100) / 100;
   }
 }
