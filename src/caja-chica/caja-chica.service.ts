@@ -287,39 +287,40 @@ export class CajaChicaService {
             (i) => i.Usuario?.SucursalID === sucursalId,
         );
 
-        const FondoInicial = iniciosActivos.reduce(
+        // ✅ PRECISIÓN MATEMÁTICA: Redondear todos los totales a 2 decimales
+        const FondoInicial = Number(iniciosActivos.reduce(
             (s, i) => s + Number(i.MontoInicial ?? 0),
             0,
-        );
+        ).toFixed(2));
 
         // Totales acumulados en la ventana SOLO de esa sucursal
         const Totales = {
-            TotalIngresos: cortesCerrados.reduce(
+            TotalIngresos: Number(cortesCerrados.reduce(
                 (a, b) => a + Number(b.TotalIngresos ?? 0),
                 0,
-            ),
-            TotalEgresos: cortesCerrados.reduce(
+            ).toFixed(2)),
+            TotalEgresos: Number(cortesCerrados.reduce(
                 (a, b) => a + Number(b.TotalEgresos ?? 0),
                 0,
-            ),
-            TotalEfectivo: cortesCerrados.reduce(
+            ).toFixed(2)),
+            TotalEfectivo: Number(cortesCerrados.reduce(
                 (a, b) => a + Number(b.TotalEfectivo ?? 0),
                 0,
-            ),
-            TotalPagoConTarjeta: cortesCerrados.reduce(
+            ).toFixed(2)),
+            TotalPagoConTarjeta: Number(cortesCerrados.reduce(
                 (a, b) => a + Number(b.TotalPagoConTarjeta ?? 0),
                 0,
-            ),
-            TotalTransferencia: cortesCerrados.reduce(
+            ).toFixed(2)),
+            TotalTransferencia: Number(cortesCerrados.reduce(
                 (a, b) => a + Number(b.TotalTransferencia ?? 0),
                 0,
-            ),
+            ).toFixed(2)),
         };
 
         // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
         // TotalEfectivo ya incluye: FondoInicial + ingresosEfectivo - egresosEfectivo
         // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
-        const SaldoEsperado = Totales.TotalEfectivo;
+        const SaldoEsperado = Number(Totales.TotalEfectivo.toFixed(2));
 
         // Validación: usuarios con “movimientos” sin corte CERRADO, SOLO sucursal
         const usuariosMovSinCorte = await this.getUsuariosConMovimientosSinCorte(
@@ -556,26 +557,27 @@ export class CajaChicaService {
             );
         }
 
-        const TotalIngresos = cortesCerrados.reduce(
+        // ✅ PRECISIÓN MATEMÁTICA: Redondear todos los totales a 2 decimales
+        const TotalIngresos = Number(cortesCerrados.reduce(
             (a, b) => a + Number(b.TotalIngresos ?? 0),
             0,
-        );
-        const TotalEgresos = cortesCerrados.reduce(
+        ).toFixed(2));
+        const TotalEgresos = Number(cortesCerrados.reduce(
             (a, b) => a + Number(b.TotalEgresos ?? 0),
             0,
-        );
-        const TotalEfectivo = cortesCerrados.reduce(
+        ).toFixed(2));
+        const TotalEfectivo = Number(cortesCerrados.reduce(
             (a, b) => a + Number(b.TotalEfectivo ?? 0),
             0,
-        );
-        const TotalPagoConTarjeta = cortesCerrados.reduce(
+        ).toFixed(2));
+        const TotalPagoConTarjeta = Number(cortesCerrados.reduce(
             (a, b) => a + Number(b.TotalPagoConTarjeta ?? 0),
             0,
-        );
-        const TotalTransferencia = cortesCerrados.reduce(
+        ).toFixed(2));
+        const TotalTransferencia = Number(cortesCerrados.reduce(
             (a, b) => a + Number(b.TotalTransferencia ?? 0),
             0,
-        );
+        ).toFixed(2));
 
         // FondoInicial vigente SOLO de inicios de esa sucursal
         const iniciosActivosRaw = await this.iniciosCajaRepository.find({
@@ -588,15 +590,15 @@ export class CajaChicaService {
             (i) => i.Usuario?.SucursalID === sucursalId,
         );
 
-        const FondoInicial = iniciosActivos.reduce(
+        const FondoInicial = Number(iniciosActivos.reduce(
             (s, i) => s + Number(i.MontoInicial ?? 0),
             0,
-        );
+        ).toFixed(2));
 
         // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
         // TotalEfectivo ya incluye: suma de TotalEfectivo de cada corte cerrado
         // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
-        const SaldoEsperado = TotalEfectivo;
+        const SaldoEsperado = Number(TotalEfectivo.toFixed(2));
 
         // Capturables del dto
         const SaldoRealNumerico = Number(SaldoReal ?? 0);
@@ -812,6 +814,20 @@ export class CajaChicaService {
     // ============================================================
     // 🔹 PATCH /caja-chica/:id/cancelar  (con código)
     // ============================================================
+    /**
+     * Cancela un cuadre de caja chica con validaciones de integridad
+     *
+     * REGLAS DE NEGOCIO:
+     * 1. No se puede cancelar si ya tiene cuadre de caja general
+     * 2. Al cancelar, los cortes asociados se desvinculan y quedan disponibles
+     *    para ser incluidos en un nuevo cuadre futuro
+     * 3. Se registra la cancelación en bitácora
+     *
+     * @param id - ID del cuadre a cancelar
+     * @param usuario - Usuario que realiza la cancelación
+     * @param codigo - Código de autorización
+     * @param motivo - Motivo de la cancelación
+     */
     async cancelarCuadre(
         id: number,
         usuario: string,
@@ -825,11 +841,20 @@ export class CajaChicaService {
             );
         }
 
+        if (!motivo || motivo.trim().length === 0) {
+            throw new HttpException(
+                'El motivo de cancelación es obligatorio',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
         this.validarCodigoAutorizacion(id, codigo);
 
         const cuadre = await this.cajaChicaRepository.findOne({
             where: { CajaChicaID: id },
+            relations: ['Sucursal'],
         });
+
         if (!cuadre) {
             throw new HttpException('Cuadre no encontrado', HttpStatus.NOT_FOUND);
         }
@@ -841,18 +866,26 @@ export class CajaChicaService {
             );
         }
 
-        console.log('🔍 ===== VALIDANDO ELIMINACIÓN DE CUADRE DE CAJA CHICA =====');
+        console.log('🔍 ===== CANCELANDO CUADRE DE CAJA CHICA =====');
         console.log(`   Caja Chica ID: ${id}`);
         console.log(`   Usuario: ${usuario}`);
+        console.log(`   Fecha del cuadre: ${cuadre.Fecha.toISOString()}`);
+        console.log(`   Sucursal: ${cuadre.Sucursal?.NombreSucursal || 'N/A'}`);
 
-        // 🔴 VALIDACIÓN 1: Verificar si existe caja general asociada
-        const { hoy, finDia } = this.rangoDiaActual();
+        // 🔴 VALIDACIÓN 1: Verificar si existe caja general asociada para el mismo día
+        // Buscar cuadre de caja general del mismo día y sucursal
+        const fechaInicio = new Date(cuadre.Fecha);
+        fechaInicio.setHours(0, 0, 0, 0);
+        const fechaFin = new Date(cuadre.Fecha);
+        fechaFin.setHours(23, 59, 59, 999);
 
         const cajaGeneral = await this.cajaGeneralRepository.findOne({
             where: {
-                Fecha: Between(cuadre.Fecha, finDia),
+                Fecha: Between(fechaInicio, fechaFin),
                 Estatus: In(['Cerrado', 'Pendiente']),
-                Sucursal: { SucursalID: cuadre.Sucursal?.SucursalID },
+                ...(cuadre.Sucursal?.SucursalID && {
+                    Sucursal: { SucursalID: cuadre.Sucursal.SucursalID },
+                }),
             },
             relations: ['Sucursal'],
         });
@@ -860,16 +893,17 @@ export class CajaChicaService {
         if (cajaGeneral) {
             console.log(`   ❌ BLOQUEADO: Existe caja general asociada (ID: ${cajaGeneral.CajaGeneralID})`);
             throw new HttpException(
-                `❌ No se puede eliminar este cuadre de caja chica porque ya está incluido en un cuadre de caja general ` +
-                `(ID: ${cajaGeneral.CajaGeneralID}, Estatus: ${cajaGeneral.Estatus}). ` +
-                `Para eliminarlo, primero debe eliminar el cuadre de caja general asociado.`,
+                `❌ No se puede cancelar este cuadre de caja chica porque ya está incluido en un cuadre de caja general ` +
+                `(ID: ${cajaGeneral.CajaGeneralID}, Estatus: ${cajaGeneral.Estatus}, Fecha: ${cajaGeneral.Fecha.toISOString().split('T')[0]}). ` +
+                `Para cancelarlo, primero debe cancelar el cuadre de caja general asociado.`,
                 HttpStatus.BAD_REQUEST,
             );
         }
 
         console.log('   ✅ No existe caja general asociada');
 
-        // 🔴 VALIDACIÓN 2: Verificar cortes asociados
+        // 🔄 ACCIÓN: Desvincular cortes asociados
+        // Los cortes quedarán disponibles para ser incluidos en un nuevo cuadre
         const cortesAsociados = await this.cortesUsuariosRepository.count({
             where: {
                 CajaChica: { CajaChicaID: id },
@@ -877,9 +911,8 @@ export class CajaChicaService {
         });
 
         if (cortesAsociados > 0) {
-            console.log(`   ⚠️ ADVERTENCIA: Tiene ${cortesAsociados} cortes asociados que serán desvinculados`);
+            console.log(`   🔄 Desvinculando ${cortesAsociados} cortes asociados...`);
 
-            // 🔄 BONUS: Actualizar estado de cortes relacionados a 'pendiente'
             await this.cortesUsuariosRepository.update(
                 { CajaChica: { CajaChicaID: id } },
                 { CajaChica: null },
@@ -888,23 +921,36 @@ export class CajaChicaService {
             console.log(`   ✅ ${cortesAsociados} cortes desvinculados exitosamente`);
         }
 
-        // Si llega aquí, NO hay cortes asociados → sí se puede cancelar
+        // 🛑 Cambiar estado a 'Cancelado'
+        const observacionOriginal = cuadre.Observaciones || '';
         cuadre.Estatus = 'Cancelado';
-        cuadre.Observaciones = motivo || 'Cancelado manualmente';
+        cuadre.Observaciones = `[CANCELADO] ${motivo} - Por: ${usuario} - ${new Date().toISOString()}` +
+            (observacionOriginal ? `\n[Observación original]: ${observacionOriginal}` : '');
+
         await this.cajaChicaRepository.save(cuadre);
 
+        // 📝 Registrar en bitácora
         await this.bitacoraEliminacionesRepository.save(
             this.bitacoraEliminacionesRepository.create({
                 Entidad: 'CajaChica',
                 EntidadID: id,
                 FechaEliminacion: new Date(),
                 UsuarioEliminacion: usuario,
-                MotivoEliminacion: motivo || 'Cancelación',
+                MotivoEliminacion: motivo,
             }),
         );
 
+        console.log('   ✅ CUADRE DE CAJA CHICA CANCELADO EXITOSAMENTE');
+        console.log('========================================================');
+
         return {
-            message: '🛑 Cuadre de Caja Chica cancelado correctamente.',
+            message: '✅ Cuadre de Caja Chica cancelado correctamente.',
+            cuadre: {
+                CajaChicaID: cuadre.CajaChicaID,
+                Fecha: cuadre.Fecha,
+                Estatus: cuadre.Estatus,
+            },
+            cortesDesvinculados: cortesAsociados,
         };
     }
 

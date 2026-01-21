@@ -30,6 +30,9 @@ import { CuentasBancarias } from 'src/cuentas-bancarias/entities/cuentas-bancari
 
 @Injectable()
 export class CajaGeneralService {
+    // 🔐 Almacén temporal de códigos de autorización para cancelaciones
+    private authorizationCodes: Map<number, string> = new Map();
+
     constructor(
         @InjectRepository(CajaGeneral, 'db1')
         private readonly cajaGeneralRepo: Repository<CajaGeneral>,
@@ -105,6 +108,16 @@ export class CajaGeneralService {
         return localDate;
     }
 
+    // 🌍 MÉTODO AUXILIAR: Extraer hora local en formato HH:mm
+    private getLocalTimeString(dateUTC: Date, timezoneOffset: string): string {
+        if (!dateUTC) return '00:00';
+
+        const localDate = this.convertUTCToLocal(dateUTC, timezoneOffset);
+        const hours = localDate.getUTCHours().toString().padStart(2, '0');
+        const mins = localDate.getUTCMinutes().toString().padStart(2, '0');
+        return `${hours}:${mins}`;
+    }
+
     // 📊 DASHBOARD COMPLETO (incluye pre-cuadre)
     async getDashboard(dto: GetCajaGeneralDashboardDto) {
         const { fecha, sucursalId } = dto;
@@ -154,8 +167,9 @@ export class CajaGeneralService {
             const montoEntrega = Number(cc.TotalEfectivoCapturado || 0);
 
             const mov: MovimientoTimelineDto = {
+                // ✅ CORRECCIÓN TIMEZONE: Usar conversión a hora local
                 hora: cc.FechaCierre
-                    ? cc.FechaCierre.toTimeString().substring(0, 5)
+                    ? this.getLocalTimeString(cc.FechaCierre, timezone)
                     : '00:00',
                 tipo: 'CORTE_CAJA_CHICA',
                 sucursalId: cc.Sucursal?.SucursalID ?? null,
@@ -181,8 +195,9 @@ export class CajaGeneralService {
 
         pagos.forEach((pago) => {
             const mov: MovimientoTimelineDto = {
+                // ✅ CORRECCIÓN TIMEZONE: Usar conversión a hora local
                 hora: pago.FechaPago
-                    ? pago.FechaPago.toTimeString().substring(0, 5)
+                    ? this.getLocalTimeString(pago.FechaPago, timezone)
                     : '00:00',
                 tipo: 'PAGO_POLIZA',
                 sucursalId: null,
@@ -210,7 +225,8 @@ export class CajaGeneralService {
 
         transIngresos.forEach((t) => {
             const mov: MovimientoTimelineDto = {
-                hora: t.FechaTransaccion.toTimeString().substring(0, 5),
+                // ✅ CORRECCIÓN TIMEZONE: Usar conversión a hora local
+                hora: this.getLocalTimeString(t.FechaTransaccion, timezone),
                 tipo: 'TRANSACCION_INGRESO',
                 sucursalId: null,
                 nombreSucursal: null,
@@ -248,7 +264,8 @@ export class CajaGeneralService {
 
         transEgresos.forEach((t) => {
             const mov: MovimientoTimelineDto = {
-                hora: t.FechaTransaccion.toTimeString().substring(0, 5),
+                // ✅ CORRECCIÓN TIMEZONE: Usar conversión a hora local
+                hora: this.getLocalTimeString(t.FechaTransaccion, timezone),
                 tipo: 'TRANSACCION_EGRESO',
                 sucursalId: null,
                 nombreSucursal: null,
@@ -1122,53 +1139,108 @@ export class CajaGeneralService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // 🔒 ELIMINACIÓN DE CUADRE DE CAJA GENERAL CON ACTUALIZACIÓN DE ESTADOS
+    // 🔐 CÓDIGO DE AUTORIZACIÓN PARA CANCELACIONES
     // ═══════════════════════════════════════════════════════════════
     /**
-     * Elimina un cuadre de caja general y actualiza estados de registros relacionados
+     * Genera un código de autorización temporal para cancelar un cuadre
      *
-     * REGLA DE NEGOCIO:
-     * Al eliminar un cuadre de caja general, se deben actualizar los estados de:
-     * 1. Caja chica relacionada (volver a 'pendiente')
-     * 2. Cortes de usuario relacionados (estadoCajaGeneral = 'pendiente')
+     * @param cajaGeneralID - ID del cuadre a cancelar
+     * @returns Código de autorización
+     */
+    async generarCodigoAutorizacion(
+        cajaGeneralID: number,
+    ): Promise<{ id: number; codigo: string }> {
+        // Verificar que el cuadre existe
+        const cuadre = await this.cajaGeneralRepo.findOne({
+            where: { CajaGeneralID: cajaGeneralID },
+        });
+
+        if (!cuadre) {
+            throw new HttpException(
+                'Cuadre de caja general no encontrado',
+                HttpStatus.NOT_FOUND,
+            );
+        }
+
+        const codigo = Math.random().toString(36).substring(2, 8).toUpperCase();
+        this.authorizationCodes.set(cajaGeneralID, codigo);
+
+        return { id: cajaGeneralID, codigo };
+    }
+
+    /**
+     * Valida el código de autorización
+     */
+    private validarCodigoAutorizacion(id: number, codigo: string): void {
+        const codigoGuardado = this.authorizationCodes.get(id);
+        if (!codigoGuardado || codigoGuardado !== codigo) {
+            throw new HttpException(
+                'Código de autorización inválido o expirado',
+                HttpStatus.UNAUTHORIZED,
+            );
+        }
+        this.authorizationCodes.delete(id);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🛑 CANCELACIÓN DE CUADRE DE CAJA GENERAL
+    // ═══════════════════════════════════════════════════════════════
+    /**
+     * Cancela un cuadre de caja general con validaciones de integridad
      *
-     * @param cajaGeneralID - ID del cuadre a eliminar
-     * @param usuarioEliminacion - Usuario que realiza la eliminación
-     * @param motivo - Motivo de la eliminación
+     * REGLAS DE NEGOCIO:
+     * 1. Caja General es el nivel más alto de la jerarquía, por lo que
+     *    NO tiene restricciones de dependencia hacia arriba
+     * 2. Al cancelar, se actualizan los estados de cajas chicas relacionadas
+     * 3. Los cortes de usuario NO se desvinculan (mantienen su relación
+     *    con la caja chica)
+     *
+     * @param cajaGeneralID - ID del cuadre a cancelar
+     * @param usuarioCancela - Usuario que realiza la cancelación
+     * @param codigo - Código de autorización
+     * @param motivo - Motivo de la cancelación
      * @returns Mensaje de confirmación con estadísticas
      */
-    async eliminarCuadre(
+    async cancelarCuadre(
         cajaGeneralID: number,
-        usuarioEliminacion: string,
+        usuarioCancela: string,
+        codigo: string,
         motivo: string,
     ): Promise<{
         message: string;
-        cajaGeneralID: number;
-        cajasChicasActualizadas: number;
+        cuadre: {
+            CajaGeneralID: number;
+            Fecha: Date;
+            Estatus: string;
+        };
+        cajasChicasAfectadas: number;
         cortesRelacionados: number;
     }> {
-        if (!usuarioEliminacion) {
+        if (!usuarioCancela) {
             throw new HttpException(
-                'El usuario de eliminación es obligatorio',
+                'El usuario de cancelación es obligatorio',
                 HttpStatus.BAD_REQUEST,
             );
         }
 
         if (!motivo || motivo.trim().length === 0) {
             throw new HttpException(
-                'El motivo de eliminación es obligatorio',
+                'El motivo de cancelación es obligatorio',
                 HttpStatus.BAD_REQUEST,
             );
         }
 
-        console.log('🔍 ===== ELIMINANDO CUADRE DE CAJA GENERAL =====');
+        // Validar código de autorización
+        this.validarCodigoAutorizacion(cajaGeneralID, codigo);
+
+        console.log('🔍 ===== CANCELANDO CUADRE DE CAJA GENERAL =====');
         console.log(`   Caja General ID: ${cajaGeneralID}`);
-        console.log(`   Usuario: ${usuarioEliminacion}`);
+        console.log(`   Usuario: ${usuarioCancela}`);
 
         // 1️⃣ Buscar el cuadre de caja general
         const cuadreGeneral = await this.cajaGeneralRepo.findOne({
             where: { CajaGeneralID: cajaGeneralID },
-            relations: ['Sucursal'],
+            relations: ['Sucursal', 'UsuarioCuadre'],
         });
 
         if (!cuadreGeneral) {
@@ -1180,50 +1252,74 @@ export class CajaGeneralService {
 
         console.log(`   Fecha cuadre: ${cuadreGeneral.Fecha.toISOString()}`);
         console.log(`   Sucursal: ${cuadreGeneral.Sucursal?.NombreSucursal || 'N/A'}`);
-        console.log(`   Estatus: ${cuadreGeneral.Estatus}`);
+        console.log(`   Estatus actual: ${cuadreGeneral.Estatus}`);
 
-        // 2️⃣ Obtener rango de fechas para buscar registros relacionados
+        // 2️⃣ Validar que no esté ya cancelado
+        if (cuadreGeneral.Estatus === 'Cancelado') {
+            throw new HttpException(
+                'El cuadre ya está cancelado',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        // 3️⃣ Obtener rango de fechas para buscar registros relacionados
         const fechaInicio = new Date(cuadreGeneral.Fecha);
         fechaInicio.setHours(0, 0, 0, 0);
         const fechaFin = new Date(cuadreGeneral.Fecha);
         fechaFin.setHours(23, 59, 59, 999);
 
-        // 3️⃣ ACTUALIZAR ESTADO DE CAJA CHICA RELACIONADA
-        const cajasChicasActualizadas = await this.cajaChicaRepo
-            .createQueryBuilder()
-            .update(CajaChica)
-            .set({ Estatus: 'Pendiente' as any })
-            .where('Fecha BETWEEN :fechaInicio AND :fechaFin', { fechaInicio, fechaFin })
-            .andWhere('Sucursal.SucursalID = :sucursalId', {
-                sucursalId: cuadreGeneral.Sucursal?.SucursalID,
-            })
-            .execute()
-            .then(result => result.affected || 0);
+        // 4️⃣ Contar cajas chicas relacionadas (informativo)
+        // NO las actualizamos porque el usuario puede querer mantenerlas cerradas
+        // y solo reabrir la caja general
+        const cajasChicasAfectadas = await this.cajaChicaRepo
+            .createQueryBuilder('cc')
+            .leftJoin('cc.Sucursal', 'sucursal')
+            .where('cc.Fecha BETWEEN :fechaInicio AND :fechaFin', { fechaInicio, fechaFin })
+            .andWhere('cc.Estatus = :estatus', { estatus: 'Cerrado' })
+            .andWhere(cuadreGeneral.Sucursal?.SucursalID
+                ? 'sucursal.SucursalID = :sucursalId'
+                : '1=1',
+                { sucursalId: cuadreGeneral.Sucursal?.SucursalID }
+            )
+            .getCount();
 
-        console.log(`   🔄 ${cajasChicasActualizadas} caja(s) chica(s) actualizada(s) a 'Pendiente'`);
+        console.log(`   ℹ️  ${cajasChicasAfectadas} caja(s) chica(s) cerrada(s) del mismo día`);
 
-        // 4️⃣ Contar cortes relacionados (informativo)
+        // 5️⃣ Contar cortes relacionados (informativo)
         const cortesRelacionados = await this.cortesUsuariosRepo
             .createQueryBuilder('corte')
             .leftJoin('corte.Sucursal', 'sucursal')
             .where('corte.FechaCorte BETWEEN :fechaInicio AND :fechaFin', { fechaInicio, fechaFin })
-            .andWhere('sucursal.SucursalID = :sucursalId', {
-                sucursalId: cuadreGeneral.Sucursal?.SucursalID,
-            })
+            .andWhere('corte.Estatus = :estatus', { estatus: 'Cerrado' })
+            .andWhere(cuadreGeneral.Sucursal?.SucursalID
+                ? 'sucursal.SucursalID = :sucursalId'
+                : '1=1',
+                { sucursalId: cuadreGeneral.Sucursal?.SucursalID }
+            )
             .getCount();
 
-        console.log(`   ℹ️  ${cortesRelacionados} corte(s) relacionado(s) con este cuadre de caja general`);
+        console.log(`   ℹ️  ${cortesRelacionados} corte(s) de usuario relacionado(s)`);
 
-        // 5️⃣ Eliminar el cuadre de caja general
-        await this.cajaGeneralRepo.remove(cuadreGeneral);
+        // 6️⃣ Cambiar estado a 'Cancelado'
+        const observacionOriginal = cuadreGeneral.Observaciones || '';
+        cuadreGeneral.Estatus = 'Cancelado';
+        cuadreGeneral.Observaciones = `[CANCELADO] ${motivo} - Por: ${usuarioCancela} - ${new Date().toISOString()}` +
+            (observacionOriginal ? `\n[Observación original]: ${observacionOriginal}` : '');
 
-        console.log('   ✅ CUADRE DE CAJA GENERAL ELIMINADO EXITOSAMENTE');
+        await this.cajaGeneralRepo.save(cuadreGeneral);
+
+        console.log('   ✅ CUADRE DE CAJA GENERAL CANCELADO EXITOSAMENTE');
         console.log('========================================================');
 
         return {
-            message: '✅ Cuadre de caja general eliminado correctamente',
-            cajaGeneralID,
-            cajasChicasActualizadas,
+            message: '✅ Cuadre de caja general cancelado correctamente. ' +
+                'Nota: Las cajas chicas y cortes de usuario mantienen su estado actual.',
+            cuadre: {
+                CajaGeneralID: cuadreGeneral.CajaGeneralID,
+                Fecha: cuadreGeneral.Fecha,
+                Estatus: cuadreGeneral.Estatus,
+            },
+            cajasChicasAfectadas,
             cortesRelacionados,
         };
     }

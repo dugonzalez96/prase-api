@@ -18,6 +18,9 @@ import { Sucursal } from 'src/sucursales/entities/sucursales.entity';
 
 @Injectable()
 export class CortesUsuariosService {
+  // 🔐 Almacén temporal de códigos de autorización para cancelaciones
+  private authorizationCodes: Map<number, string> = new Map();
+
   constructor(
     @InjectRepository(IniciosCaja, 'db1')
     private readonly iniciosCajaRepository: Repository<IniciosCaja>,
@@ -49,17 +52,33 @@ export class CortesUsuariosService {
 
   ) { }
 
-  async getAllCortes(): Promise<CortesUsuarios[]> {
-    return this.cortesUsuariosRepository.find({
-      relations: ['usuarioID'], // 🔹 Incluir relación con usuarios directamente
+  async getAllCortes(): Promise<any[]> {
+    const cortes = await this.cortesUsuariosRepository.find({
+      relations: ['usuarioID', 'UsuarioCreador', 'Sucursal'], // 🔹 Incluir relación con usuarios y creador
       order: { FechaCorte: 'DESC' },
     });
+
+    // 🔹 Mapear para incluir campos de auditoría
+    return cortes.map((corte) => ({
+      ...corte,
+      // Información de auditoría
+      corteDe: corte.usuarioID
+        ? `${corte.usuarioID.NombreUsuario || ''}`
+        : 'N/A',
+      creadoPor: corte.UsuarioCreador
+        ? `${corte.UsuarioCreador.NombreUsuario || ''}`
+        : corte.usuarioID
+          ? `${corte.usuarioID.NombreUsuario || ''}`
+          : 'N/A',
+      usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
+      usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
+    }));
   }
 
   /**
    * 🔹 Obtener todos los cortes del día actual
    */
-  async getCortesDelDia(): Promise<CortesUsuarios[]> {
+  async getCortesDelDia(): Promise<any[]> {
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0); // Inicio del día
 
@@ -68,15 +87,24 @@ export class CortesUsuariosService {
 
     console.log(finDia);
 
-    return this.cortesUsuariosRepository.find({
+    const cortes = await this.cortesUsuariosRepository.find({
       where: {
         FechaCorte: Between(hoy, finDia),
       },
-      relations: ['usuarioID', 'InicioCaja'],
+      relations: ['usuarioID', 'UsuarioCreador', 'InicioCaja', 'Sucursal'],
       order: {
         FechaCorte: 'DESC',
       },
     });
+
+    // 🔹 Mapear para incluir campos de auditoría
+    return cortes.map((corte) => ({
+      ...corte,
+      corteDe: corte.usuarioID?.NombreUsuario || 'N/A',
+      creadoPor: corte.UsuarioCreador?.NombreUsuario || corte.usuarioID?.NombreUsuario || 'N/A',
+      usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
+      usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
+    }));
   }
 
   /**
@@ -714,22 +742,25 @@ export class CortesUsuariosService {
     });
 
     // 🔍 DEBUG CÁLCULOS FINALES
-    const totalEfectivo =
+    // ✅ PRECISIÓN MATEMÁTICA: Redondear todos los totales a 2 decimales
+    const totalEfectivo = Number((
       Number(inicioCaja.TotalEfectivo) +
       totalIngresosEfectivo -
-      totalEgresosEfectivo;
+      totalEgresosEfectivo
+    ).toFixed(2));
 
     // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
     // totalEfectivo ya incluye: inicioCaja.TotalEfectivo + ingresosEfectivo - egresosEfectivo
     // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
-    const saldoEsperado = totalEfectivo;
+    const saldoEsperado = Number(totalEfectivo.toFixed(2));
 
-    const totalTransferencia =
+    const totalTransferencia = Number((
       Number(inicioCaja.TotalTransferencia) +
       totalIngresosTransferencia -
-      totalEgresosTransferencia;
+      totalEgresosTransferencia
+    ).toFixed(2));
 
-    const totalPagoConTarjeta = totalIngresosTarjeta - totalEgresosTarjeta;
+    const totalPagoConTarjeta = Number((totalIngresosTarjeta - totalEgresosTarjeta).toFixed(2));
 
     console.log('🧮 CÁLCULO TOTAL EFECTIVO:', {
       InicioCajaTotalEfectivo: Number(inicioCaja.TotalEfectivo),
@@ -767,15 +798,16 @@ export class CortesUsuariosService {
 
     const polizasMap = new Map(polizas.map((p) => [p.PolizaID, p]));
 
+    // ✅ PRECISIÓN MATEMÁTICA: Redondear todos los valores a 2 decimales
     return {
-      TotalIngresos: totalIngresos,
-      TotalIngresosEfectivo: totalIngresosEfectivo,
-      TotalIngresosTarjeta: totalIngresosTarjeta,
-      TotalIngresosTransferencia: totalIngresosTransferencia,
-      TotalEgresos: totalEgresos,
-      TotalEgresosEfectivo: totalEgresosEfectivo,
-      TotalEgresosTarjeta: totalEgresosTarjeta,
-      TotalEgresosTransferencia: totalEgresosTransferencia,
+      TotalIngresos: Number(totalIngresos.toFixed(2)),
+      TotalIngresosEfectivo: Number(totalIngresosEfectivo.toFixed(2)),
+      TotalIngresosTarjeta: Number(totalIngresosTarjeta.toFixed(2)),
+      TotalIngresosTransferencia: Number(totalIngresosTransferencia.toFixed(2)),
+      TotalEgresos: Number(totalEgresos.toFixed(2)),
+      TotalEgresosEfectivo: Number(totalEgresosEfectivo.toFixed(2)),
+      TotalEgresosTarjeta: Number(totalEgresosTarjeta.toFixed(2)),
+      TotalEgresosTransferencia: Number(totalEgresosTransferencia.toFixed(2)),
       TotalEfectivo: totalEfectivo,
       TotalPagoConTarjeta: totalPagoConTarjeta,
       TotalTransferencia: totalTransferencia,
@@ -788,7 +820,7 @@ export class CortesUsuariosService {
       Observaciones: '',
       Estatus: 'Pendiente',
       DetalleIngresos: ingresos.map((t) => ({
-        Monto: t.Monto,
+        Monto: Number(Number(t.Monto).toFixed(2)),
         FormaPago: t.FormaPago,
         Fecha: t.FechaTransaccion,
         Descripcion: t.Descripcion,
@@ -1002,6 +1034,7 @@ export class CortesUsuariosService {
     totalTarjetaCapturado: number,
     totalTransferenciaCapturado: number,
     observaciones?: string,
+    usuarioCreadorID?: number, // Usuario que realiza el corte (puede ser diferente al propietario)
   ): Promise<CortesUsuarios> {
     if (!usuarioID) {
       throw new HttpException(
@@ -1184,6 +1217,15 @@ export class CortesUsuariosService {
       throw new HttpException('El usuario no existe.', HttpStatus.BAD_REQUEST);
     }
 
+    // 🔹 AUDITORÍA: Buscar usuario creador si se proporciona
+    let usuarioCreador = null;
+    if (usuarioCreadorID && usuarioCreadorID !== usuarioID) {
+      usuarioCreador = await this.usersRepository.findOne({
+        where: { UsuarioID: usuarioCreadorID },
+      });
+      console.log('🔍 Usuario creador encontrado:', usuarioCreador?.NombreUsuario);
+    }
+
     const sucursal = await this.sucursalRepository.findOne({
       where: { SucursalID: usuario.SucursalID },
     });
@@ -1221,6 +1263,7 @@ export class CortesUsuariosService {
     const nuevoCorte = this.cortesUsuariosRepository.create({
       InicioCaja: inicioCaja,
       usuarioID: usuario,
+      UsuarioCreador: usuarioCreador || usuario, // Si no hay creador específico, usar el propietario
       Sucursal: sucursal,
       FechaCorte: new Date(),
       TotalIngresos: corteCalculado.TotalIngresos,
@@ -1397,6 +1440,196 @@ export class CortesUsuariosService {
     return {
       message: `Corte de caja eliminado correctamente`,
       corteID,
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🔐 CÓDIGO DE AUTORIZACIÓN PARA CANCELACIONES
+  // ═══════════════════════════════════════════════════════════════
+  /**
+   * Genera un código de autorización temporal para cancelar un corte
+   *
+   * @param corteID - ID del corte a cancelar
+   * @returns Código de autorización
+   */
+  async generarCodigoAutorizacion(
+    corteID: number,
+  ): Promise<{ id: number; codigo: string }> {
+    // Verificar que el corte existe
+    const corte = await this.cortesUsuariosRepository.findOne({
+      where: { CorteUsuarioID: corteID },
+    });
+
+    if (!corte) {
+      throw new HttpException(
+        'Corte de caja no encontrado',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const codigo = Math.random().toString(36).substring(2, 8).toUpperCase();
+    this.authorizationCodes.set(corteID, codigo);
+
+    return { id: corteID, codigo };
+  }
+
+  /**
+   * Valida el código de autorización
+   *
+   * @param id - ID del corte
+   * @param codigo - Código a validar
+   */
+  private validarCodigoAutorizacion(id: number, codigo: string): void {
+    const codigoGuardado = this.authorizationCodes.get(id);
+    if (!codigoGuardado || codigoGuardado !== codigo) {
+      throw new HttpException(
+        'Código de autorización inválido o expirado',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    this.authorizationCodes.delete(id);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🛑 CANCELACIÓN DE CORTE DE USUARIO
+  // ═══════════════════════════════════════════════════════════════
+  /**
+   * Cancela un corte de usuario con validaciones de integridad
+   *
+   * REGLA DE NEGOCIO:
+   * No se puede cancelar un corte de usuario si:
+   * 1. Ya está incluido en un cuadre de caja chica (tiene CajaChica asociada)
+   *
+   * Al cancelar:
+   * 1. Cambiar estado a 'Cancelado'
+   * 2. Registrar quién canceló y cuándo
+   * 3. Reactivar el inicio de caja si existe
+   * 4. Las transacciones quedan desbloqueadas automáticamente ya que
+   *    la validación de inmutabilidad busca cortes con Estatus = 'Cerrado'
+   *
+   * @param corteID - ID del corte a cancelar
+   * @param usuarioCancela - Usuario que realiza la cancelación
+   * @param codigo - Código de autorización
+   * @param motivo - Motivo de la cancelación
+   * @returns Mensaje de confirmación con datos del corte
+   */
+  async cancelarCorte(
+    corteID: number,
+    usuarioCancela: string,
+    codigo: string,
+    motivo: string,
+  ): Promise<{
+    message: string;
+    corte: CortesUsuarios;
+    transaccionesDesbloqueadas: number;
+  }> {
+    if (!usuarioCancela) {
+      throw new HttpException(
+        'El usuario de cancelación es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!motivo || motivo.trim().length === 0) {
+      throw new HttpException(
+        'El motivo de cancelación es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // Validar código de autorización
+    this.validarCodigoAutorizacion(corteID, codigo);
+
+    console.log('🔍 ===== CANCELANDO CORTE DE USUARIO =====');
+    console.log(`   Corte ID: ${corteID}`);
+    console.log(`   Usuario: ${usuarioCancela}`);
+
+    // 1️⃣ Buscar el corte con sus relaciones
+    const corte = await this.cortesUsuariosRepository.findOne({
+      where: { CorteUsuarioID: corteID },
+      relations: ['usuarioID', 'InicioCaja', 'CajaChica', 'Sucursal'],
+    });
+
+    if (!corte) {
+      throw new HttpException(
+        'Corte de caja no encontrado',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    console.log(`   Usuario del corte: ${corte.usuarioID?.NombreUsuario || 'N/A'}`);
+    console.log(`   Fecha corte: ${corte.FechaCorte.toISOString()}`);
+    console.log(`   Estatus actual: ${corte.Estatus}`);
+
+    // 2️⃣ Validar que no esté ya cancelado
+    if (corte.Estatus === 'Cancelado') {
+      throw new HttpException(
+        'El corte ya está cancelado',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // 3️⃣ VALIDACIÓN CRÍTICA: No cancelar si tiene cuadre de caja chica
+    if (corte.CajaChica) {
+      console.log(`   ❌ BLOQUEADO: Tiene caja chica asociada (ID: ${corte.CajaChica.CajaChicaID})`);
+      throw new HttpException(
+        `❌ No se puede cancelar este corte de usuario porque ya está incluido en un cuadre de caja chica ` +
+        `(ID: ${corte.CajaChica.CajaChicaID}). ` +
+        `Para cancelarlo, primero debe cancelar el cuadre de caja chica asociado.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    console.log('   ✅ El corte no tiene caja chica asociada');
+
+    // 4️⃣ Cambiar estado a 'Cancelado'
+    corte.Estatus = 'Cancelado';
+    corte.Observaciones = `[CANCELADO] ${motivo} - Por: ${usuarioCancela} - ${new Date().toISOString()}`;
+
+    // 5️⃣ Si el corte tenía un inicio de caja asociado, reactivarlo
+    if (corte.InicioCaja) {
+      console.log(`   🔄 Reactivando inicio de caja (ID: ${corte.InicioCaja.InicioCajaID})`);
+
+      await this.iniciosCajaRepository.update(
+        { InicioCajaID: corte.InicioCaja.InicioCajaID },
+        { Estatus: 'Activo' },
+      );
+
+      console.log('   ✅ Inicio de caja reactivado');
+    }
+
+    // 6️⃣ Guardar el corte actualizado
+    const corteActualizado = await this.cortesUsuariosRepository.save(corte);
+
+    // 7️⃣ Registrar en bitácora
+    await this.bitacoraEliminacionesRepository.save(
+      this.bitacoraEliminacionesRepository.create({
+        Entidad: 'CortesUsuarios',
+        EntidadID: corteID,
+        FechaEliminacion: new Date(),
+        UsuarioEliminacion: usuarioCancela,
+        MotivoEliminacion: `CANCELACIÓN: ${motivo}`,
+      }),
+    );
+
+    // 8️⃣ Contar transacciones que quedan desbloqueadas
+    // (Las transacciones se desbloquean automáticamente porque la validación
+    // de inmutabilidad busca cortes con Estatus = 'Cerrado')
+    const transaccionesDesbloqueadas = await this.transaccionesRepository.count({
+      where: {
+        UsuarioCreo: { UsuarioID: corte.usuarioID?.UsuarioID },
+        FechaTransaccion: corte.FechaCorte,
+      },
+    });
+
+    console.log(`   📊 ${transaccionesDesbloqueadas} transacciones desbloqueadas`);
+    console.log('   ✅ CORTE CANCELADO EXITOSAMENTE');
+    console.log('========================================================');
+
+    return {
+      message: '✅ Corte de usuario cancelado correctamente. Las transacciones asociadas han sido desbloqueadas.',
+      corte: corteActualizado,
+      transaccionesDesbloqueadas,
     };
   }
 

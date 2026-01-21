@@ -30,7 +30,12 @@ export class CortesUsuarios {
 
   @ManyToOne(() => usuarios, { nullable: true })
   @JoinColumn({ name: 'usuarioID' })
-  usuarioID: usuarios; // Relación con usuarios
+  usuarioID: usuarios; // Usuario del cual es el corte (propietario)
+
+  // 🔹 AUDITORÍA: Usuario que creó el corte (puede ser diferente al propietario)
+  @ManyToOne(() => usuarios, { nullable: true })
+  @JoinColumn({ name: 'UsuarioCreadorID' })
+  UsuarioCreador: usuarios | null;
 
   @CreateDateColumn({ type: 'datetime', default: () => 'CURRENT_TIMESTAMP' })
   FechaCorte: Date;

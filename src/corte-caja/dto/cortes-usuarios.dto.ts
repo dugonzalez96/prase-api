@@ -1,7 +1,8 @@
 export class CreateCorteUsuarioDto {
     // 📌 Identificadores necesarios
     InicioCajaID: number;
-    usuarioID: number;
+    usuarioID: number; // Usuario del cual es el corte
+    usuarioCreadorID?: number; // Usuario que realiza el corte (opcional, si no se envía, se usa usuarioID)
   
     // 📌 Datos calculados automáticamente
     TotalIngresos: number;
@@ -88,4 +89,11 @@ export class CreateCorteUsuarioDto {
     FechaPago: Date;
   }[];
   }
+
+// 🔹 DTO para cancelar un corte de usuario
+export class CancelCorteUsuarioDto {
+  usuario: string;        // quien cancela (username o id legible)
+  codigo: string;         // código de autorización generado por GET /:id/codigo
+  motivo: string;         // motivo de cancelación (obligatorio)
+}
   

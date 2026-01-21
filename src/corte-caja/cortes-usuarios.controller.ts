@@ -7,12 +7,14 @@ import {
   Patch,
   HttpException,
   HttpStatus,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { CortesUsuariosService } from './cortes-usuarios.service';
 import {
   CreateCorteUsuarioDto,
   GenerateCorteUsuarioDto,
   UpdateCorteUsuarioDto,
+  CancelCorteUsuarioDto,
 } from './dto/cortes-usuarios.dto';
 import { CortesUsuarios } from './entities/cortes-usuarios.entity';
 
@@ -141,6 +143,58 @@ export class CortesUsuariosController {
       corteDto.TotalTarjetaCapturado,
       corteDto.TotalTransferenciaCapturado,
       corteDto.Observaciones,
+      corteDto.usuarioCreadorID, // Usuario que realiza el corte
     );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 🔐 ENDPOINTS PARA CANCELACIÓN DE CORTES
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * 🔹 Generar código de autorización para cancelar un corte
+   * GET /cortes-usuarios/:id/codigo
+   */
+  @Get(':id/codigo')
+  async generarCodigoAutorizacion(@Param('id', ParseIntPipe) id: number) {
+    return this.cortesUsuariosService.generarCodigoAutorizacion(id);
+  }
+
+  /**
+   * 🔹 Cancelar un corte de usuario
+   * POST /cortes-usuarios/:id/cancelar
+   *
+   * Requiere código de autorización previamente generado
+   * No se puede cancelar si el corte ya está incluido en un cuadre de caja chica
+   */
+  @Post(':id/cancelar')
+  async cancelarCorte(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: CancelCorteUsuarioDto,
+  ) {
+    const { usuario, codigo, motivo } = body;
+
+    if (!usuario) {
+      throw new HttpException(
+        'El usuario es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!codigo) {
+      throw new HttpException(
+        'El código de autorización es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!motivo || motivo.trim().length === 0) {
+      throw new HttpException(
+        'El motivo de cancelación es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.cortesUsuariosService.cancelarCorte(id, usuario, codigo, motivo);
   }
 }
