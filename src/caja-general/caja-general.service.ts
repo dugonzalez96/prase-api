@@ -813,6 +813,24 @@ export class CajaGeneralService {
             );
         }
 
+        // 🔒 VALIDACIÓN: No permitir crear cuadre si ya existe uno activo para el día
+        // Solo bloquear si el estatus es 'Cerrado' o 'Pendiente' (los cancelados permiten crear nuevo)
+        const cuadreExistente = await this.cajaGeneralRepo
+            .createQueryBuilder('cg')
+            .leftJoin('cg.Sucursal', 'sucursal')
+            .where('cg.Fecha BETWEEN :startUTC AND :endUTC', { startUTC, endUTC })
+            .andWhere('cg.Estatus IN (:...estatusBloquean)', { estatusBloquean: ['Cerrado', 'Pendiente'] })
+            .andWhere(sucursalId ? 'sucursal.SucursalID = :sucursalId' : '1=1', { sucursalId })
+            .getOne();
+
+        if (cuadreExistente) {
+            throw new HttpException(
+                `❌ Ya existe un cuadre de caja general con estatus '${cuadreExistente.Estatus}' para la fecha ${fecha}. ` +
+                `Solo se permite un cuadre activo por día. Si necesita crear uno nuevo, primero cancele el existente.`,
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
         // 🔍 VALIDACIÓN CRÍTICA FASE 1: Usuarios con movimientos sin corte CERRADO
         console.log('🔍 ===== VALIDANDO PREREQUISITOS PARA CUADRE DE CAJA GENERAL =====');
         const usuariosSinCorte = await this.getUsuariosConMovimientosSinCorteGlobal(fecha, sucursalId);

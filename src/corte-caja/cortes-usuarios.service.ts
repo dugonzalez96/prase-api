@@ -52,24 +52,48 @@ export class CortesUsuariosService {
 
   ) { }
 
+  /**
+   * 🔹 Helper: Obtener nombre completo del empleado
+   * Concatena Nombre + Paterno + Materno
+   */
+  private getNombreCompletoEmpleado(usuario: usuarios | null): string {
+    if (!usuario) return 'N/A';
+
+    const empleado = usuario.Empleado;
+    if (!empleado) {
+      // Fallback al nombre de usuario si no tiene empleado asociado
+      return usuario.NombreUsuario || 'N/A';
+    }
+
+    const partes = [
+      empleado.Nombre || '',
+      empleado.Paterno || '',
+      empleado.Materno || '',
+    ].filter(Boolean);
+
+    return partes.length > 0 ? partes.join(' ') : usuario.NombreUsuario || 'N/A';
+  }
+
   async getAllCortes(): Promise<any[]> {
     const cortes = await this.cortesUsuariosRepository.find({
-      relations: ['usuarioID', 'UsuarioCreador', 'Sucursal'], // 🔹 Incluir relación con usuarios y creador
+      relations: [
+        'usuarioID',
+        'usuarioID.Empleado',      // 🔹 Incluir empleado del usuario del corte
+        'UsuarioCreador',
+        'UsuarioCreador.Empleado', // 🔹 Incluir empleado del creador
+        'Sucursal'
+      ],
       order: { FechaCorte: 'DESC' },
     });
 
-    // 🔹 Mapear para incluir campos de auditoría
+    // 🔹 Mapear para incluir campos de auditoría con nombre completo del empleado
     return cortes.map((corte) => ({
       ...corte,
-      // Información de auditoría
-      corteDe: corte.usuarioID
-        ? `${corte.usuarioID.NombreUsuario || ''}`
-        : 'N/A',
+      // Información de auditoría con nombre completo
+      corteDe: this.getNombreCompletoEmpleado(corte.usuarioID),
       creadoPor: corte.UsuarioCreador
-        ? `${corte.UsuarioCreador.NombreUsuario || ''}`
-        : corte.usuarioID
-          ? `${corte.usuarioID.NombreUsuario || ''}`
-          : 'N/A',
+        ? this.getNombreCompletoEmpleado(corte.UsuarioCreador)
+        : this.getNombreCompletoEmpleado(corte.usuarioID),
       usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
       usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
     }));
@@ -91,17 +115,26 @@ export class CortesUsuariosService {
       where: {
         FechaCorte: Between(hoy, finDia),
       },
-      relations: ['usuarioID', 'UsuarioCreador', 'InicioCaja', 'Sucursal'],
+      relations: [
+        'usuarioID',
+        'usuarioID.Empleado',      // 🔹 Incluir empleado del usuario del corte
+        'UsuarioCreador',
+        'UsuarioCreador.Empleado', // 🔹 Incluir empleado del creador
+        'InicioCaja',
+        'Sucursal'
+      ],
       order: {
         FechaCorte: 'DESC',
       },
     });
 
-    // 🔹 Mapear para incluir campos de auditoría
+    // 🔹 Mapear para incluir campos de auditoría con nombre completo del empleado
     return cortes.map((corte) => ({
       ...corte,
-      corteDe: corte.usuarioID?.NombreUsuario || 'N/A',
-      creadoPor: corte.UsuarioCreador?.NombreUsuario || corte.usuarioID?.NombreUsuario || 'N/A',
+      corteDe: this.getNombreCompletoEmpleado(corte.usuarioID),
+      creadoPor: corte.UsuarioCreador
+        ? this.getNombreCompletoEmpleado(corte.UsuarioCreador)
+        : this.getNombreCompletoEmpleado(corte.usuarioID),
       usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
       usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
     }));
@@ -1061,11 +1094,12 @@ export class CortesUsuariosService {
     const mañana = new Date();
     mañana.setHours(23, 59, 59, 999);
 
+    // Verificar si ya existe un corte ACTIVO (no cerrado ni cancelado) para hoy
     const corteExistente = await this.cortesUsuariosRepository.findOne({
       where: {
         usuarioID: { UsuarioID: usuarioID },
         FechaCorte: Between(hoy, mañana),
-        Estatus: Not('Cerrado'),
+        Estatus: Not(In(['Cerrado', 'Cancelado'])), // Permitir crear nuevo si el anterior fue cancelado
       },
       relations: ['usuarioID'],
     });
