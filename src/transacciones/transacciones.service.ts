@@ -205,6 +205,9 @@ export class TransaccionesService {
   // ═══════════════════════════════════════════════════════════════
 
   async create(createDto: CreateTransaccionDto): Promise<Transacciones> {
+    console.log('🔄 TransaccionesService.create() - Iniciando...');
+    console.log('   DTO recibido:', JSON.stringify(createDto, null, 2));
+
     const {
       TipoTransaccion,
       FormaPago,
@@ -216,8 +219,33 @@ export class TransaccionesService {
       Validado,
     } = createDto;
 
+    // ═══════════════════════════════════════════════════════════════
+    // VALIDACIONES DE CAMPOS REQUERIDOS
+    // ═══════════════════════════════════════════════════════════════
+
+    if (!TipoTransaccion) {
+      throw new HttpException(
+        'El campo TipoTransaccion es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!FormaPago) {
+      throw new HttpException(
+        'El campo FormaPago es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!UsuarioCreoID) {
+      throw new HttpException(
+        'El campo UsuarioCreoID es obligatorio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     // Validar que el monto sea positivo
-    if (Monto <= 0) {
+    if (Monto === undefined || Monto === null || Monto <= 0) {
       throw new HttpException(
         'El monto debe ser mayor a 0',
         HttpStatus.BAD_REQUEST,
@@ -237,13 +265,23 @@ export class TransaccionesService {
     }*/
 
     // Validar UsuarioCreo
+    console.log('   Buscando usuario con ID:', UsuarioCreoID);
     const usuarioCreo = await this.usuariosRepository.findOne({
       where: { UsuarioID: UsuarioCreoID },
     });
     if (!usuarioCreo) {
       throw new HttpException(
-        'Usuario que creó la transacción no encontrado',
+        `Usuario con ID ${UsuarioCreoID} no encontrado`,
         HttpStatus.NOT_FOUND,
+      );
+    }
+    console.log('   ✅ Usuario encontrado:', usuarioCreo.NombreUsuario, '- SucursalID:', usuarioCreo.SucursalID);
+
+    // Validar que el usuario tenga sucursal asignada
+    if (!usuarioCreo.SucursalID) {
+      throw new HttpException(
+        `El usuario ${usuarioCreo.NombreUsuario} no tiene una sucursal asignada. Contacte al administrador.`,
+        HttpStatus.BAD_REQUEST,
       );
     }
 
@@ -352,21 +390,27 @@ export class TransaccionesService {
       }
     }
 
-    // Validar CuentaBancaria
+    // Validar CuentaBancaria (0 o null/undefined = sin cuenta bancaria)
     let cuentaBancaria = null;
-    if (CuentaBancariaID) {
+    // CuentaBancariaID = 0 se trata como "sin cuenta bancaria"
+    if (CuentaBancariaID && CuentaBancariaID > 0) {
+      console.log('   Buscando cuenta bancaria con ID:', CuentaBancariaID);
       cuentaBancaria = await this.cuentasBancariasRepository.findOne({
         where: { CuentaBancariaID },
       });
       if (!cuentaBancaria) {
         throw new HttpException(
-          'Cuenta bancaria no encontrada',
+          `Cuenta bancaria con ID ${CuentaBancariaID} no encontrada`,
           HttpStatus.NOT_FOUND,
         );
       }
+      console.log('   ✅ Cuenta bancaria encontrada');
+    } else {
+      console.log('   ℹ️ Sin cuenta bancaria (CuentaBancariaID:', CuentaBancariaID, ')');
     }
 
     // Crear transacción
+    console.log('   📝 Creando entidad de transacción...');
     const nuevaTransaccion = this.transaccionesRepository.create({
       TipoTransaccion,
       FormaPago,
@@ -380,7 +424,22 @@ export class TransaccionesService {
       Validado: Validado ? true : false, // Aseguramos que sea booleano
     });
 
-    return this.transaccionesRepository.save(nuevaTransaccion);
+    try {
+      console.log('   💾 Guardando transacción en base de datos...');
+      const saved = await this.transaccionesRepository.save(nuevaTransaccion);
+      console.log('   ✅ Transacción guardada con ID:', saved.TransaccionID);
+      return saved;
+    } catch (dbError) {
+      console.error('   ❌ Error de base de datos al guardar transacción:', {
+        message: dbError.message,
+        code: dbError.code,
+        sqlMessage: dbError.sqlMessage,
+      });
+      throw new HttpException(
+        `Error al guardar transacción: ${dbError.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   async findAll(): Promise<Transacciones[]> {

@@ -458,30 +458,45 @@ export class CajaChicaService {
         // ✅ VALIDACIÓN 1: Montos capturados no negativos
         const { SaldoReal, TotalEfectivoCapturado, TotalTarjetaCapturado, TotalTransferenciaCapturado } = dto;
 
-        if (
-            TotalEfectivoCapturado < 0 ||
-            TotalTarjetaCapturado < 0 ||
-            TotalTransferenciaCapturado < 0 ||
-            SaldoReal < 0
-        ) {
+        if (TotalEfectivoCapturado < 0) {
             throw new HttpException(
-                '❌ Los montos capturados no pueden ser negativos',
+                '❌ El monto de efectivo capturado no puede ser negativo',
                 HttpStatus.BAD_REQUEST,
             );
         }
 
-        // ✅ VALIDACIÓN 2: SaldoReal debe coincidir con suma de capturados
-        const sumaCapturados = Number(TotalEfectivoCapturado ?? 0) +
-            Number(TotalTarjetaCapturado ?? 0) +
-            Number(TotalTransferenciaCapturado ?? 0);
+        // 💵 VALIDACIÓN CORREGIDA: SaldoReal = SOLO EFECTIVO
+        // El dinero físico que se entrega es SOLO el efectivo.
+        // Tarjeta y transferencia son INFORMATIVOS (ya están en el banco).
+        // Por lo tanto, SaldoReal debe coincidir SOLO con TotalEfectivoCapturado.
+        const efectivoCapturado = Number(TotalEfectivoCapturado ?? 0);
+        const saldoRealNumerico = Number(SaldoReal ?? 0);
 
-        const diferenciaCaptura = Math.abs(Number(SaldoReal ?? 0) - sumaCapturados);
+        // Si se proporcionó SaldoReal, debe coincidir con el efectivo
+        if (SaldoReal !== undefined && SaldoReal !== null) {
+            const diferenciaCaptura = Math.abs(saldoRealNumerico - efectivoCapturado);
 
-        if (diferenciaCaptura > 0.01) {
+            if (diferenciaCaptura > 0.01) {
+                throw new HttpException(
+                    `❌ Inconsistencia: El saldo real ($${saldoRealNumerico.toFixed(2)}) debe coincidir ` +
+                    `con el efectivo capturado ($${efectivoCapturado.toFixed(2)}). ` +
+                    `Recuerde: Solo se entrega efectivo físico. Tarjeta y transferencia son informativos.`,
+                    HttpStatus.BAD_REQUEST,
+                );
+            }
+        }
+
+        // ℹ️ Tarjeta y transferencia son solo informativos, no se validan contra el efectivo
+        // pero deben ser >= 0 si se proporcionan
+        if (TotalTarjetaCapturado !== undefined && TotalTarjetaCapturado < 0) {
             throw new HttpException(
-                `❌ Inconsistencia: El saldo real ($${Number(SaldoReal).toFixed(2)}) no coincide ` +
-                `con la suma de montos capturados ($${sumaCapturados.toFixed(2)}). ` +
-                `Diferencia: $${diferenciaCaptura.toFixed(2)}`,
+                '❌ El monto de tarjeta capturado no puede ser negativo',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        if (TotalTransferenciaCapturado !== undefined && TotalTransferenciaCapturado < 0) {
+            throw new HttpException(
+                '❌ El monto de transferencia capturado no puede ser negativo',
                 HttpStatus.BAD_REQUEST,
             );
         }

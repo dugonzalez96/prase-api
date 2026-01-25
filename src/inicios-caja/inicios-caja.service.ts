@@ -55,6 +55,9 @@ export class IniciosCajaService {
   }
 
  async create(createDto: CreateInicioCajaDto): Promise<IniciosCaja> {
+  console.log('🔄 IniciosCajaService.create() - Iniciando...');
+  console.log('   DTO recibido:', JSON.stringify(createDto, null, 2));
+
   const {
     UsuarioID,
     UsuarioAutorizoID,
@@ -63,19 +66,6 @@ export class IniciosCajaService {
     TotalEfectivo,
     TotalTransferencia,
   } = createDto;
-
-  // Verificar si el usuario ya tiene un inicio de caja activo
-  const inicioActivo = await this.iniciosCajaRepository.findOne({
-    where: { Estatus: 'Activo', Usuario: { UsuarioID } },
-    relations: ['Usuario', 'Sucursal'],
-  });
-
-  if (inicioActivo) {
-    throw new HttpException(
-      'El usuario ya tiene un inicio de caja activo',
-      HttpStatus.CONFLICT,
-    );
-  }
 
   // Validar que todos los campos requeridos estén presentes
   if (!UsuarioID) {
@@ -92,24 +82,68 @@ export class IniciosCajaService {
     );
   }
 
+  if (MontoInicial === undefined || MontoInicial === null) {
+    throw new HttpException(
+      'El MontoInicial es obligatorio',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  if (TotalEfectivo === undefined || TotalEfectivo === null) {
+    throw new HttpException(
+      'El TotalEfectivo es obligatorio',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  if (TotalTransferencia === undefined || TotalTransferencia === null) {
+    throw new HttpException(
+      'El TotalTransferencia es obligatorio',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  // Verificar si el usuario ya tiene un inicio de caja activo
+  console.log('   Verificando si existe inicio de caja activo para usuario:', UsuarioID);
+  const inicioActivo = await this.iniciosCajaRepository.findOne({
+    where: { Estatus: 'Activo', Usuario: { UsuarioID } },
+    relations: ['Usuario', 'Sucursal'],
+  });
+
+  if (inicioActivo) {
+    console.log('   ❌ Usuario ya tiene inicio de caja activo:', inicioActivo.InicioCajaID);
+    throw new HttpException(
+      `El usuario ya tiene un inicio de caja activo (ID: ${inicioActivo.InicioCajaID})`,
+      HttpStatus.CONFLICT,
+    );
+  }
+  console.log('   ✅ No hay inicio de caja activo');
+
   // Validar si el UsuarioID existe
+  console.log('   Buscando usuario con ID:', UsuarioID);
   const usuario = await this.usuariosRepository.findOne({
     where: { UsuarioID: UsuarioID },
   });
   if (!usuario) {
-    throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
+    throw new HttpException(
+      `Usuario con ID ${UsuarioID} no encontrado`,
+      HttpStatus.NOT_FOUND,
+    );
   }
+  console.log('   ✅ Usuario encontrado:', usuario.NombreUsuario);
 
   // Validar si el UsuarioAutorizoID existe
+  console.log('   Buscando usuario autorizador con ID:', UsuarioAutorizoID);
   const usuarioAutorizo = await this.usuariosRepository.findOne({
     where: { UsuarioID: UsuarioAutorizoID },
   });
   if (!usuarioAutorizo) {
     throw new HttpException(
-      'Usuario autorizador no encontrado',
+      `Usuario autorizador con ID ${UsuarioAutorizoID} no encontrado`,
       HttpStatus.NOT_FOUND,
     );
   }
+  console.log('   ✅ Usuario autorizador encontrado:', usuarioAutorizo.NombreUsuario);
 
   // ➕ NUEVO: validar que el usuario tenga sucursal y obtenerla
   if (!usuario.SucursalID) {
@@ -155,6 +189,7 @@ export class IniciosCajaService {
   // }
 
   // Crear el nuevo inicio de caja
+  console.log('   📝 Creando entidad de inicio de caja...');
   const nuevoInicioCaja = this.iniciosCajaRepository.create({
     Usuario: usuario,
     UsuarioAutorizo: usuarioAutorizo,
@@ -166,19 +201,32 @@ export class IniciosCajaService {
     Estatus: 'Activo', // Valor por defecto definido en el entity
   });
 
-  const savedInicioCaja =
-    await this.iniciosCajaRepository.save(nuevoInicioCaja);
+  try {
+    console.log('   💾 Guardando inicio de caja en base de datos...');
+    const savedInicioCaja = await this.iniciosCajaRepository.save(nuevoInicioCaja);
+    console.log('   ✅ Inicio de caja guardado con ID:', savedInicioCaja.InicioCajaID);
 
-  // Registro en la bitácora de ediciones
-  const bitacora = this.bitacoraEdicionesRepository.create({
-    Entidad: 'IniciosCaja',
-    EntidadID: savedInicioCaja.InicioCajaID,
-    CamposModificados: createDto,
-    UsuarioEdicion: usuario.NombreUsuario,
-  });
-  await this.bitacoraEdicionesRepository.save(bitacora);
+    // Registro en la bitácora de ediciones
+    const bitacora = this.bitacoraEdicionesRepository.create({
+      Entidad: 'IniciosCaja',
+      EntidadID: savedInicioCaja.InicioCajaID,
+      CamposModificados: createDto,
+      UsuarioEdicion: usuario.NombreUsuario,
+    });
+    await this.bitacoraEdicionesRepository.save(bitacora);
 
-  return savedInicioCaja;
+    return savedInicioCaja;
+  } catch (dbError) {
+    console.error('   ❌ Error de base de datos al guardar inicio de caja:', {
+      message: dbError.message,
+      code: dbError.code,
+      sqlMessage: dbError.sqlMessage,
+    });
+    throw new HttpException(
+      `Error al guardar inicio de caja: ${dbError.message}`,
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
+  }
 }
 
 

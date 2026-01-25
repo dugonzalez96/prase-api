@@ -9,6 +9,7 @@ import {
   HttpException,
   HttpStatus,
   Query,
+  BadRequestException,
 } from '@nestjs/common';
 import { CreateTransaccionDto } from './dto/create-transaccion.dto';
 import { UpdateTransaccionDto } from './dto/update-transaccion.dto';
@@ -20,8 +21,66 @@ export class TransaccionesController {
   constructor(private readonly transaccionesService: TransaccionesService) { }
 
   @Post()
-  create(@Body() createTransaccionDto: CreateTransaccionDto) {
-    return this.transaccionesService.create(createTransaccionDto);
+  async create(@Body() createTransaccionDto: CreateTransaccionDto) {
+    try {
+      console.log('📥 POST /transacciones - Body recibido:', JSON.stringify(createTransaccionDto, null, 2));
+      const result = await this.transaccionesService.create(createTransaccionDto);
+      console.log('✅ Transacción creada exitosamente:', result.TransaccionID);
+      return {
+        success: true,
+        message: 'Transacción creada exitosamente',
+        data: result,
+      };
+    } catch (error) {
+      console.error('❌ Error al crear transacción:', {
+        message: error.message,
+        stack: error.stack,
+        dto: JSON.stringify(createTransaccionDto),
+      });
+
+      // Extraer el mensaje del error
+      let errorMessage = error.message;
+      let errorCode = 'TRANSACTION_ERROR';
+      let statusCode = HttpStatus.BAD_REQUEST;
+
+      // Si es HttpException, extraer información
+      if (error instanceof HttpException) {
+        const response = error.getResponse();
+        statusCode = error.getStatus();
+
+        if (typeof response === 'string') {
+          errorMessage = response;
+        } else if (typeof response === 'object' && response !== null) {
+          errorMessage = (response as any).message || error.message;
+        }
+
+        // Determinar código de error según el mensaje
+        if (errorMessage.includes('no encontrado') || errorMessage.includes('not found')) {
+          errorCode = 'NOT_FOUND';
+        } else if (errorMessage.includes('Caja Chica')) {
+          errorCode = 'CAJA_CHICA_CERRADA';
+        } else if (errorMessage.includes('Caja General')) {
+          errorCode = 'CAJA_GENERAL_CERRADA';
+        } else if (errorMessage.includes('sucursal')) {
+          errorCode = 'SIN_SUCURSAL';
+        } else if (errorMessage.includes('obligatorio')) {
+          errorCode = 'CAMPO_REQUERIDO';
+        } else if (errorMessage.includes('monto')) {
+          errorCode = 'MONTO_INVALIDO';
+        }
+      }
+
+      throw new HttpException(
+        {
+          success: false,
+          errorCode,
+          message: errorMessage,
+          details: error.message,
+          timestamp: new Date().toISOString(),
+        },
+        statusCode,
+      );
+    }
   }
 
   @Get()

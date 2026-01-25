@@ -904,38 +904,43 @@ export class CajaGeneralService {
         }
 
         // ✅ VALIDACIÓN: Montos capturados no negativos
-        if (
-            (typeof totalEfectivoCapturado === 'number' && totalEfectivoCapturado < 0) ||
-            (typeof totalTarjetaCapturado === 'number' && totalTarjetaCapturado < 0) ||
-            (typeof totalTransferenciaCapturado === 'number' && totalTransferenciaCapturado < 0)
-        ) {
+        if (typeof totalEfectivoCapturado === 'number' && totalEfectivoCapturado < 0) {
             throw new HttpException(
-                '❌ Los montos capturados no pueden ser negativos',
+                '❌ El monto de efectivo capturado no puede ser negativo',
                 HttpStatus.BAD_REQUEST,
             );
         }
 
-        // ✅ VALIDACIÓN: SaldoReal debe coincidir con suma de capturados (si se proporcionan)
-        if (
-            typeof totalEfectivoCapturado === 'number' ||
-            typeof totalTarjetaCapturado === 'number' ||
-            typeof totalTransferenciaCapturado === 'number'
-        ) {
-            const sumaCapturados =
-                (totalEfectivoCapturado ?? 0) +
-                (totalTarjetaCapturado ?? 0) +
-                (totalTransferenciaCapturado ?? 0);
-
-            const diferenciaCaptura = Math.abs(saldoRealUsado - sumaCapturados);
+        // 💵 VALIDACIÓN CORREGIDA: SaldoReal = SOLO EFECTIVO
+        // El dinero físico que se entrega es SOLO el efectivo.
+        // Tarjeta y transferencia son INFORMATIVOS (ya están en el banco).
+        // Por lo tanto, SaldoReal debe coincidir SOLO con totalEfectivoCapturado.
+        if (typeof totalEfectivoCapturado === 'number') {
+            const diferenciaCaptura = Math.abs(saldoRealUsado - totalEfectivoCapturado);
 
             if (diferenciaCaptura > 0.01) {
                 throw new HttpException(
-                    `❌ Inconsistencia: El saldo real ($${saldoRealUsado.toFixed(2)}) no coincide ` +
-                    `con la suma de montos capturados ($${sumaCapturados.toFixed(2)}). ` +
-                    `Diferencia: $${diferenciaCaptura.toFixed(2)}`,
+                    `❌ Inconsistencia: El saldo real ($${saldoRealUsado.toFixed(2)}) debe coincidir ` +
+                    `con el efectivo capturado ($${totalEfectivoCapturado.toFixed(2)}). ` +
+                    `Recuerde: Solo se entrega efectivo físico. Tarjeta y transferencia son informativos.`,
                     HttpStatus.BAD_REQUEST,
                 );
             }
+        }
+
+        // ℹ️ Tarjeta y transferencia son solo informativos, no se validan contra el efectivo
+        // pero deben ser >= 0 si se proporcionan
+        if (typeof totalTarjetaCapturado === 'number' && totalTarjetaCapturado < 0) {
+            throw new HttpException(
+                '❌ El monto de tarjeta capturado no puede ser negativo',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+        if (typeof totalTransferenciaCapturado === 'number' && totalTransferenciaCapturado < 0) {
+            throw new HttpException(
+                '❌ El monto de transferencia capturado no puede ser negativo',
+                HttpStatus.BAD_REQUEST,
+            );
         }
 
         const totalDesdeCajaChica =
