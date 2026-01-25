@@ -1,45 +1,153 @@
 // src/caja-chica/caja-chica.controller.ts
-import { Controller, Get, Post, Patch, Param, Body, Req, ParseIntPipe, Query } from '@nestjs/common';
+import {
+    Controller,
+    Get,
+    Post,
+    Patch,
+    Param,
+    Body,
+    Req,
+    ParseIntPipe,
+    Query,
+    HttpException,
+    HttpStatus,
+    BadRequestException,
+} from '@nestjs/common';
 import { CajaChicaService } from './caja-chica.service';
 import { CreateCajaChicaDto } from './dto/create-caja-chica.dto';
 import { CancelCuadreDto } from './dto/cancel-cuadre.dto';
-
 
 @Controller('caja-chica')
 export class CajaChicaController {
     constructor(private readonly cajaChicaService: CajaChicaService) { }
 
-    // Precuadre del día (resumen para UI)
-    // caja-chica.controller.ts
-    @Get('precuadre/:sucursalId')
-    precuadre(@Param('sucursalId') sucursalId: string) {
-        return this.cajaChicaService.precuadre(Number(sucursalId));
+    // ════════════════════════════════════════════════════════════════
+    // HELPER: Manejo de errores estructurado
+    // ════════════════════════════════════════════════════════════════
+    private handleError(error: any, defaultMessage: string) {
+        console.error(`❌ ${defaultMessage}:`, {
+            message: error.message,
+            stack: error.stack?.split('\n').slice(0, 3).join('\n'),
+        });
+
+        let errorMessage = error.message;
+        let errorCode = 'CAJA_CHICA_ERROR';
+        let statusCode = HttpStatus.BAD_REQUEST;
+
+        if (error instanceof HttpException) {
+            const response = error.getResponse();
+            statusCode = error.getStatus();
+
+            if (typeof response === 'string') {
+                errorMessage = response;
+            } else if (typeof response === 'object' && response !== null) {
+                errorMessage = (response as any).message || error.message;
+            }
+
+            // Determinar código de error según el mensaje
+            if (errorMessage.includes('no encontrad') || errorMessage.includes('not found')) {
+                errorCode = 'NOT_FOUND';
+            } else if (errorMessage.includes('PENDIENTE')) {
+                errorCode = 'CORTES_PENDIENTES';
+            } else if (errorMessage.includes('movimientos sin corte')) {
+                errorCode = 'USUARIOS_SIN_CORTE';
+            } else if (errorMessage.includes('ya existe un cuadre')) {
+                errorCode = 'CUADRE_DUPLICADO';
+            } else if (errorMessage.includes('sucursal')) {
+                errorCode = 'SIN_SUCURSAL';
+            } else if (errorMessage.includes('obligatori')) {
+                errorCode = 'CAMPO_REQUERIDO';
+            } else if (errorMessage.includes('negativ')) {
+                errorCode = 'MONTO_NEGATIVO';
+            } else if (errorMessage.includes('diferencia')) {
+                errorCode = 'DIFERENCIA_SIN_OBSERVACION';
+            } else if (errorMessage.includes('Caja General')) {
+                errorCode = 'BLOQUEADO_POR_CAJA_GENERAL';
+            } else if (errorMessage.includes('código') || errorMessage.includes('autorización')) {
+                errorCode = 'CODIGO_INVALIDO';
+            }
+        }
+
+        throw new HttpException(
+            {
+                success: false,
+                errorCode,
+                message: errorMessage,
+                details: error.message,
+                timestamp: new Date().toISOString(),
+            },
+            statusCode,
+        );
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // ENDPOINTS
+    // ════════════════════════════════════════════════════════════════
 
-    // Cuadrar caja chica (usa el usuario autenticado; fallback a 1)
-    @Post('cuadrar/:usuarioID/:sucursalId')  // 👈 Usuario primero, sucursal después
-    cuadrar(
+    // Precuadre del día (resumen para UI)
+    @Get('precuadre/:sucursalId')
+    async precuadre(@Param('sucursalId') sucursalId: string) {
+        try {
+            console.log('📥 GET /caja-chica/precuadre - SucursalID:', sucursalId);
+            const result = await this.cajaChicaService.precuadre(Number(sucursalId));
+            return {
+                success: true,
+                data: result,
+            };
+        } catch (error) {
+            this.handleError(error, 'Error al obtener precuadre de caja chica');
+        }
+    }
+
+    // Cuadrar caja chica
+    @Post('cuadrar/:usuarioID/:sucursalId')
+    async cuadrar(
         @Param('usuarioID', ParseIntPipe) usuarioID: number,
         @Param('sucursalId', ParseIntPipe) sucursalId: number,
         @Req() req,
         @Body() dto: CreateCajaChicaDto,
     ) {
-        return this.cajaChicaService.cuadrarCajaChica(usuarioID, sucursalId, dto);
+        try {
+            console.log('📥 POST /caja-chica/cuadrar - UsuarioID:', usuarioID, 'SucursalID:', sucursalId);
+            console.log('   Body:', JSON.stringify(dto, null, 2));
+            const result = await this.cajaChicaService.cuadrarCajaChica(usuarioID, sucursalId, dto);
+            return {
+                success: true,
+                message: 'Cuadre de caja chica realizado exitosamente',
+                data: result,
+            };
+        } catch (error) {
+            this.handleError(error, 'Error al cuadrar caja chica');
+        }
     }
-
-
 
     // Historial
     @Get('historial')
     async historial() {
-        return this.cajaChicaService.historial();
+        try {
+            const result = await this.cajaChicaService.historial();
+            return {
+                success: true,
+                data: result,
+            };
+        } catch (error) {
+            this.handleError(error, 'Error al obtener historial de caja chica');
+        }
     }
 
     // Generar código de autorización para cancelar un cuadre específico
     @Get(':id/codigo')
     async generarCodigo(@Param('id', ParseIntPipe) id: number) {
-        return this.cajaChicaService.generarCodigoAutorizacion(id);
+        try {
+            console.log('📥 GET /caja-chica/:id/codigo - ID:', id);
+            const result = await this.cajaChicaService.generarCodigoAutorizacion(id);
+            return {
+                success: true,
+                data: result,
+            };
+        } catch (error) {
+            this.handleError(error, 'Error al generar código de autorización');
+        }
     }
 
     // Cancelar un cuadre con código de autorización
@@ -48,23 +156,50 @@ export class CajaChicaController {
         @Param('id', ParseIntPipe) id: number,
         @Body() body: CancelCuadreDto
     ) {
-        const { usuario, codigo, motivo } = body;
-        return this.cajaChicaService.cancelarCuadre(id, usuario, codigo, motivo);
+        try {
+            console.log('📥 PATCH /caja-chica/:id/cancelar - ID:', id);
+            const { usuario, codigo, motivo } = body;
+
+            if (!usuario) {
+                throw new BadRequestException('El usuario es obligatorio');
+            }
+            if (!codigo) {
+                throw new BadRequestException('El código de autorización es obligatorio');
+            }
+            if (!motivo || motivo.trim().length === 0) {
+                throw new BadRequestException('El motivo de cancelación es obligatorio');
+            }
+
+            const result = await this.cajaChicaService.cancelarCuadre(id, usuario, codigo, motivo);
+            return {
+                success: true,
+                message: 'Cuadre de caja chica cancelado exitosamente',
+                data: result,
+            };
+        } catch (error) {
+            this.handleError(error, 'Error al cancelar cuadre de caja chica');
+        }
     }
 
-    // 🔎 Listar por estatus (filtros opcionales de fecha)
-    // GET /caja-chica/estatus/Cerrado?desde=2025-11-01&hasta=2025-11-30
+    // Listar por estatus (filtros opcionales de fecha)
     @Get('estatus/:estatus')
     async listarPorEstatus(
         @Param('estatus') estatus: 'Pendiente' | 'Cerrado' | 'Cancelado',
         @Query('desde') desde?: string,
         @Query('hasta') hasta?: string,
     ) {
-        return this.cajaChicaService.listarPorEstatus(estatus, { desde, hasta });
+        try {
+            const result = await this.cajaChicaService.listarPorEstatus(estatus, { desde, hasta });
+            return {
+                success: true,
+                data: result,
+            };
+        } catch (error) {
+            this.handleError(error, 'Error al listar cuadres por estatus');
+        }
     }
 
-    // ✏️ PATCH capturables/observaciones (si NO está Cerrado)
-    // PATCH /caja-chica/123/capturables
+    // Actualizar capturables/observaciones (si NO está Cerrado)
     @Patch(':id/capturables')
     async actualizarCapturables(
         @Param('id') id: number,
@@ -75,10 +210,35 @@ export class CajaChicaController {
             TotalEfectivoCapturado?: number;
             TotalTarjetaCapturado?: number;
             TotalTransferenciaCapturado?: number;
+            usuarioEdicion?: string;
         },
     ) {
-        // ⚠️ Aquí podrías tomar el usuario autenticado; por ahora ejemplo fijo
-        const usuarioEdicion = 'sistema';
-        return this.cajaChicaService.actualizarCapturables(id, body, usuarioEdicion);
+        try {
+            console.log('📥 PATCH /caja-chica/:id/capturables - ID:', id);
+
+            // Validar montos no negativos
+            if (body.SaldoReal !== undefined && body.SaldoReal < 0) {
+                throw new BadRequestException('El saldo real no puede ser negativo');
+            }
+            if (body.TotalEfectivoCapturado !== undefined && body.TotalEfectivoCapturado < 0) {
+                throw new BadRequestException('El efectivo capturado no puede ser negativo');
+            }
+            if (body.TotalTarjetaCapturado !== undefined && body.TotalTarjetaCapturado < 0) {
+                throw new BadRequestException('La tarjeta capturada no puede ser negativa');
+            }
+            if (body.TotalTransferenciaCapturado !== undefined && body.TotalTransferenciaCapturado < 0) {
+                throw new BadRequestException('La transferencia capturada no puede ser negativa');
+            }
+
+            const usuarioEdicion = body.usuarioEdicion || 'sistema';
+            const result = await this.cajaChicaService.actualizarCapturables(id, body, usuarioEdicion);
+            return {
+                success: true,
+                message: 'Capturables actualizados exitosamente',
+                data: result,
+            };
+        } catch (error) {
+            this.handleError(error, 'Error al actualizar capturables');
+        }
     }
 }

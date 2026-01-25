@@ -294,7 +294,11 @@ export class CajaChicaService {
         ).toFixed(2));
 
         // Totales acumulados en la ventana SOLO de esa sucursal
+        // ════════════════════════════════════════════════════════════════
+        // 📊 TOTALES INFORMATIVOS (suma de TODO para visualización)
+        // ════════════════════════════════════════════════════════════════
         const Totales = {
+            // Total de ingresos = suma de TODO (efectivo + tarjeta + transferencia)
             TotalIngresos: Number(cortesCerrados.reduce(
                 (a, b) => a + Number(b.TotalIngresos ?? 0),
                 0,
@@ -303,6 +307,7 @@ export class CajaChicaService {
                 (a, b) => a + Number(b.TotalEgresos ?? 0),
                 0,
             ).toFixed(2)),
+            // TotalEfectivo = cálculo del sistema (para referencia)
             TotalEfectivo: Number(cortesCerrados.reduce(
                 (a, b) => a + Number(b.TotalEfectivo ?? 0),
                 0,
@@ -317,10 +322,25 @@ export class CajaChicaService {
             ).toFixed(2)),
         };
 
-        // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
-        // TotalEfectivo ya incluye: FondoInicial + ingresosEfectivo - egresosEfectivo
-        // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
-        const SaldoEsperado = Number(Totales.TotalEfectivo.toFixed(2));
+        // ════════════════════════════════════════════════════════════════
+        // 💵 CORRECCIÓN CRÍTICA: USAR LO QUE REALMENTE SE ENTREGÓ
+        // ════════════════════════════════════════════════════════════════
+        // ANTES: Se usaba TotalEfectivo (cálculo del sistema)
+        // AHORA: Se usa TotalEfectivoCapturado (lo que REALMENTE entregó el usuario)
+        //
+        // REGLA DE CASCADA:
+        // - El usuario debía entregar $24,000 pero solo entregó $2,000
+        // - La diferencia ($22,000) quedó registrada en el corte con observaciones
+        // - Caja chica debe recibir $2,000 (lo entregado), no $24,000 (lo esperado)
+        // ════════════════════════════════════════════════════════════════
+        const efectivoRealmenteEntregado = Number(cortesCerrados.reduce(
+            (a, b) => a + Number(b.TotalEfectivoCapturado ?? b.SaldoReal ?? 0),
+            0,
+        ).toFixed(2));
+
+        // 💵 SaldoEsperado = efectivo que REALMENTE se entregó en los cortes
+        // NO usar TotalEfectivo (cálculo del sistema), usar TotalEfectivoCapturado (lo entregado)
+        const SaldoEsperado = efectivoRealmenteEntregado;
 
         // Validación: usuarios con “movimientos” sin corte CERRADO, SOLO sucursal
         const usuariosMovSinCorte = await this.getUsuariosConMovimientosSinCorte(
@@ -581,6 +601,7 @@ export class CajaChicaService {
             (a, b) => a + Number(b.TotalEgresos ?? 0),
             0,
         ).toFixed(2));
+        // TotalEfectivo = cálculo del sistema (para referencia/auditoría)
         const TotalEfectivo = Number(cortesCerrados.reduce(
             (a, b) => a + Number(b.TotalEfectivo ?? 0),
             0,
@@ -591,6 +612,22 @@ export class CajaChicaService {
         ).toFixed(2));
         const TotalTransferencia = Number(cortesCerrados.reduce(
             (a, b) => a + Number(b.TotalTransferencia ?? 0),
+            0,
+        ).toFixed(2));
+
+        // ════════════════════════════════════════════════════════════════
+        // 💵 CORRECCIÓN CRÍTICA: USAR LO QUE REALMENTE SE ENTREGÓ EN CORTES
+        // ════════════════════════════════════════════════════════════════
+        // ANTES: Se usaba TotalEfectivo (cálculo del sistema)
+        // AHORA: Se usa TotalEfectivoCapturado (lo que REALMENTE entregó el usuario)
+        //
+        // REGLA DE CASCADA:
+        // - El usuario debía entregar $24,000 pero solo entregó $2,000
+        // - La diferencia quedó registrada en el corte con observaciones
+        // - Caja chica debe recibir $2,000 (lo entregado), no $24,000 (lo esperado)
+        // ════════════════════════════════════════════════════════════════
+        const efectivoRealmenteEntregadoEnCortes = Number(cortesCerrados.reduce(
+            (a, b) => a + Number(b.TotalEfectivoCapturado ?? b.SaldoReal ?? 0),
             0,
         ).toFixed(2));
 
@@ -610,10 +647,9 @@ export class CajaChicaService {
             0,
         ).toFixed(2));
 
-        // 💵 SOLO EFECTIVO: El saldo esperado debe ser solo efectivo físico
-        // TotalEfectivo ya incluye: suma de TotalEfectivo de cada corte cerrado
-        // Tarjeta y transferencia se muestran informativamente pero NO se incluyen en el saldo esperado
-        const SaldoEsperado = Number(TotalEfectivo.toFixed(2));
+        // 💵 SaldoEsperado = efectivo que REALMENTE se entregó en los cortes
+        // NO usar TotalEfectivo (cálculo del sistema), usar TotalEfectivoCapturado (lo entregado)
+        const SaldoEsperado = efectivoRealmenteEntregadoEnCortes;
 
         // Capturables del dto
         const SaldoRealNumerico = Number(SaldoReal ?? 0);
