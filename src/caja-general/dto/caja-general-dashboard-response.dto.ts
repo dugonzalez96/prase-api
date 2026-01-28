@@ -32,9 +32,12 @@ export interface HistorialCuadreCajaGeneralDto {
   saldoInicial: number;
   totalEntradas: number;
   totalEgresos: number;
-  saldoFinal: number;
+  saldoFinal: number; // Mantener por compatibilidad
+  entrego: number; // Lo que realmente se entregó (= SaldoReal)
+  diferencia: number; // entrego - saldoEsperado (negativo=faltante, positivo=sobrante)
+  observaciones: string | null;
   usuarioCuadre: string | null;
-  estatus: string; // 'Cerrado' | 'Pendiente' | etc.
+  estatus: string; // 'Cerrado' | 'Pendiente' | 'Cancelado'
 }
 
 export interface CajaGeneralDashboardResponseDto {

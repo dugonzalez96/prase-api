@@ -53,6 +53,30 @@ export class CortesUsuariosService {
   ) { }
 
   /**
+   * 🔹 Helper: Clasificar forma de pago de un PagoPoliza por NombreMetodo
+   * Usa el nombre del método de pago (string) en lugar de IDs hardcodeados,
+   * para evitar errores si los IDs cambian en la tabla MetodosPago.
+   */
+  private clasificarMetodoPago(pago: PagosPoliza): 'Efectivo' | 'Tarjeta' | 'Transferencia' | 'Desconocido' {
+    const nombre = (pago.MetodoPago?.NombreMetodo || '').toLowerCase().trim();
+
+    if (nombre.includes('efectivo')) return 'Efectivo';
+    if (nombre.includes('tarjeta') || nombre.includes('credito') || nombre.includes('crédito') || nombre.includes('debito') || nombre.includes('débito')) return 'Tarjeta';
+    if (nombre.includes('transferencia') || nombre.includes('deposito') || nombre.includes('depósito') || nombre.includes('spei')) return 'Transferencia';
+
+    // Fallback: si no se reconoce el nombre, loguear advertencia
+    console.warn(`⚠️ Método de pago no reconocido: ID=${pago.MetodoPago?.IDMetodoPago}, Nombre="${pago.MetodoPago?.NombreMetodo}". Se clasificará como Efectivo por defecto.`);
+    return 'Efectivo';
+  }
+
+  /**
+   * 🔹 Helper: Verificar si un pago NO es en efectivo (para validación de pagos no validados)
+   */
+  private esMetodoPagoNoEfectivo(pago: PagosPoliza): boolean {
+    return this.clasificarMetodoPago(pago) !== 'Efectivo';
+  }
+
+  /**
    * 🔹 Helper: Obtener nombre completo del empleado
    * Concatena Nombre + Paterno + Materno
    */
@@ -531,40 +555,36 @@ export class CortesUsuariosService {
     });
 
     // **SUMAMOS LOS PAGOS DE PÓLIZA COMO INGRESOS**
+    // ✅ CORRECCIÓN P21: Usar NombreMetodo en lugar de IDMetodoPago hardcodeado
     pagosPoliza.forEach((pago) => {
-      totalIngresos += Number(pago.MontoPagado);
-      if (pago.MetodoPago.IDMetodoPago === 3)
-        totalIngresosEfectivo += Number(pago.MontoPagado);
-      if (pago.MetodoPago.IDMetodoPago === 4)
-        totalIngresosTarjeta += Number(pago.MontoPagado);
-      if ([1, 2].includes(pago.MetodoPago.IDMetodoPago))
-        totalIngresosTransferencia += Number(pago.MontoPagado);
+      const monto = Number(pago.MontoPagado);
+      totalIngresos += monto;
+      const tipo = this.clasificarMetodoPago(pago);
+      if (tipo === 'Efectivo') totalIngresosEfectivo += monto;
+      if (tipo === 'Tarjeta') totalIngresosTarjeta += monto;
+      if (tipo === 'Transferencia') totalIngresosTransferencia += monto;
     });
 
     // **CALCULAMOS EL SALDO ESPERADO**
     const saldoEsperado =
       Number(inicioCaja.MontoInicial) + totalIngresos - totalEgresos;
 
-    // **🔥 CORRECCIÓN: INICIOS NO TIENE "TOTAL CON TARJETA"**
     const totalEfectivo =
       Number(inicioCaja.TotalEfectivo) +
       totalIngresosEfectivo -
       totalEgresosEfectivo;
-    console.log('inicios caja' + totalEgresosTransferencia);
+
     const totalTransferencia =
       Number(inicioCaja.TotalTransferencia) +
       totalIngresosTransferencia -
       totalEgresosTransferencia;
 
-    // 🔴 **ANTES ESTABA MAL**:
-    // const totalPagoConTarjeta = Number(inicioCaja.TotalTransferencia) + totalIngresosTarjeta - totalEgresosTarjeta;
-
-    // ✅ **CORRECCIÓN: Solo se suman ingresos y se restan egresos**
     const totalPagoConTarjeta = totalIngresosTarjeta - totalEgresosTarjeta;
 
     // **VALIDACIÓN DE PAGOS NO VALIDADOS**
+    // ✅ CORRECCIÓN P21: Usar clasificación por nombre en lugar de ID hardcodeado
     const pagosNoValidados = pagosPoliza.filter(
-      (pago) => pago.MetodoPago.IDMetodoPago !== 3 && !pago.Validado,
+      (pago) => this.esMetodoPagoNoEfectivo(pago) && !pago.Validado,
     );
 
     if (pagosNoValidados.length > 0) {
@@ -752,19 +772,18 @@ export class CortesUsuariosService {
     });
 
     // 🔍 DEBUG PAGOS PÓLIZA
+    // ✅ CORRECCIÓN P21: Usar NombreMetodo en lugar de IDMetodoPago hardcodeado
     console.log('📋 PAGOS PÓLIZA:');
     pagosPoliza.forEach((pago) => {
       const monto = Number(pago.MontoPagado);
       totalIngresos += monto;
 
-      console.log(`  💳 Método ${pago.MetodoPago.IDMetodoPago} (${pago.MetodoPago?.NombreMetodo}): $${monto}`);
+      const tipo = this.clasificarMetodoPago(pago);
+      console.log(`  💳 Método ${pago.MetodoPago?.IDMetodoPago} "${pago.MetodoPago?.NombreMetodo}" → ${tipo}: $${monto}`);
 
-      if (pago.MetodoPago.IDMetodoPago === 3)
-        totalIngresosEfectivo += monto;
-      if (pago.MetodoPago.IDMetodoPago === 4)
-        totalIngresosTarjeta += monto;
-      if ([1, 2].includes(pago.MetodoPago.IDMetodoPago))
-        totalIngresosTransferencia += monto;
+      if (tipo === 'Efectivo') totalIngresosEfectivo += monto;
+      if (tipo === 'Tarjeta') totalIngresosTarjeta += monto;
+      if (tipo === 'Transferencia') totalIngresosTransferencia += monto;
     });
 
     console.log('📋 TOTALES DESPUÉS DE PAGOS PÓLIZA:', {
@@ -810,8 +829,9 @@ export class CortesUsuariosService {
       TotalPagoConTarjeta: totalPagoConTarjeta,
     });
 
+    // ✅ CORRECCIÓN P21: Usar clasificación por nombre en lugar de ID hardcodeado
     const pagosNoValidados = pagosPoliza.filter(
-      (pago) => pago.MetodoPago.IDMetodoPago !== 3 && !pago.Validado,
+      (pago) => this.esMetodoPagoNoEfectivo(pago) && !pago.Validado,
     );
 
     if (pagosNoValidados.length > 0) {
@@ -968,14 +988,14 @@ export class CortesUsuariosService {
     });
 
     // 🔹 Calcular pagos de póliza
+    // ✅ CORRECCIÓN P21: Usar NombreMetodo en lugar de IDMetodoPago hardcodeado
     pagosPoliza.forEach((pago) => {
-      totalIngresos += Number(pago.MontoPagado);
-      if (pago.MetodoPago.IDMetodoPago === 3)
-        totalIngresosEfectivo += Number(pago.MontoPagado);
-      if (pago.MetodoPago.IDMetodoPago === 4)
-        totalIngresosTarjeta += Number(pago.MontoPagado);
-      if ([1, 2].includes(pago.MetodoPago.IDMetodoPago))
-        totalIngresosTransferencia += Number(pago.MontoPagado);
+      const monto = Number(pago.MontoPagado);
+      totalIngresos += monto;
+      const tipo = this.clasificarMetodoPago(pago);
+      if (tipo === 'Efectivo') totalIngresosEfectivo += monto;
+      if (tipo === 'Tarjeta') totalIngresosTarjeta += monto;
+      if (tipo === 'Transferencia') totalIngresosTransferencia += monto;
     });
 
     // 🔹 Correcciones de cálculos

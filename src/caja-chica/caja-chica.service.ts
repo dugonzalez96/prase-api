@@ -1010,9 +1010,32 @@ export class CajaChicaService {
     // 🔹 GET /caja-chica/historial
     // ============================================================
     async historial() {
-        return this.cajaChicaRepository.find({
+        const cuadres = await this.cajaChicaRepository.find({
             order: { Fecha: 'DESC' },
-            relations: ['UsuarioCuadre'],
+            relations: ['UsuarioCuadre', 'CortesUsuarios', 'Sucursal'],
+        });
+
+        return cuadres.map((cuadre) => {
+            // ════════════════════════════════════════════════════════════════
+            // CORRECCIÓN: Recalcular TotalIngresos desde los cortes asociados
+            // para que SIEMPRE refleje TODAS las formas de pago
+            // (efectivo + tarjeta + transferencia + depósitos)
+            // ════════════════════════════════════════════════════════════════
+            let totalIngresosRecalculado = Number(cuadre.TotalIngresos ?? 0);
+
+            if (cuadre.CortesUsuarios && cuadre.CortesUsuarios.length > 0) {
+                totalIngresosRecalculado = Number(
+                    cuadre.CortesUsuarios.reduce(
+                        (sum, corte) => sum + Number(corte.TotalIngresos ?? 0),
+                        0,
+                    ).toFixed(2),
+                );
+            }
+
+            return {
+                ...cuadre,
+                TotalIngresos: totalIngresosRecalculado,
+            };
         });
     }
 
@@ -1039,10 +1062,28 @@ export class CajaChicaService {
         }
 
 
-        return this.cajaChicaRepository.find({
+        const cuadres = await this.cajaChicaRepository.find({
             where,
             order: { Fecha: 'DESC' },
-            relations: ['UsuarioCuadre'],
+            relations: ['UsuarioCuadre', 'CortesUsuarios', 'Sucursal'],
+        });
+
+        return cuadres.map((cuadre) => {
+            let totalIngresosRecalculado = Number(cuadre.TotalIngresos ?? 0);
+
+            if (cuadre.CortesUsuarios && cuadre.CortesUsuarios.length > 0) {
+                totalIngresosRecalculado = Number(
+                    cuadre.CortesUsuarios.reduce(
+                        (sum, corte) => sum + Number(corte.TotalIngresos ?? 0),
+                        0,
+                    ).toFixed(2),
+                );
+            }
+
+            return {
+                ...cuadre,
+                TotalIngresos: totalIngresosRecalculado,
+            };
         });
     }
 

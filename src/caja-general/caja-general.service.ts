@@ -399,19 +399,33 @@ export class CajaGeneralService {
         });
 
         // ✅ CORRECCIÓN: Convertir fechas UTC a hora local para mostrar correctamente
+        // ✅ CORRECCIÓN P10: Agregar campo "entrego" y "diferencia"
         const historialCuadres: HistorialCuadreCajaGeneralDto[] =
-            historialRegistros.map((cg) => ({
-                cajaGeneralId: cg.CajaGeneralID,
-                fecha: this.convertUTCToLocal(cg.Fecha, timezone),
-                sucursalId: cg.Sucursal?.SucursalID || null,
-                nombreSucursal: cg.Sucursal?.NombreSucursal || null,
-                saldoInicial: Number(cg.SaldoAnterior || 0),
-                totalEntradas: Number(cg.TotalIngresos || 0),
-                totalEgresos: Number(cg.TotalEgresos || 0),
-                saldoFinal: Number(cg.SaldoFinal || 0),
-                usuarioCuadre: cg.UsuarioCuadre?.NombreUsuario || null,
-                estatus: cg.Estatus,
-            }));
+            historialRegistros.map((cg) => {
+                const saldoInicialHist = Number(cg.SaldoAnterior || 0);
+                const totalEntradasHist = Number(cg.TotalIngresos || 0);
+                const totalEgresosHist = Number(cg.TotalEgresos || 0);
+                const entrego = Number(cg.SaldoReal || cg.SaldoFinal || 0);
+                const saldoEsperado = Number(cg.SaldoEsperado || 0);
+                // diferencia = lo que entregó - lo que debía entregar
+                const diferencia = Number((entrego - saldoEsperado).toFixed(2));
+
+                return {
+                    cajaGeneralId: cg.CajaGeneralID,
+                    fecha: this.convertUTCToLocal(cg.Fecha, timezone),
+                    sucursalId: cg.Sucursal?.SucursalID || null,
+                    nombreSucursal: cg.Sucursal?.NombreSucursal || null,
+                    saldoInicial: saldoInicialHist,
+                    totalEntradas: totalEntradasHist,
+                    totalEgresos: totalEgresosHist,
+                    saldoFinal: Number(cg.SaldoFinal || 0),
+                    entrego,
+                    diferencia,
+                    observaciones: cg.Observaciones || null,
+                    usuarioCuadre: cg.UsuarioCuadre?.NombreUsuario || null,
+                    estatus: cg.Estatus,
+                };
+            });
 
         console.log('✅ Dashboard generado exitosamente');
 
