@@ -89,11 +89,7 @@ export class CajaChicaController {
     async precuadre(@Param('sucursalId') sucursalId: string) {
         try {
             console.log('📥 GET /caja-chica/precuadre - SucursalID:', sucursalId);
-            const result = await this.cajaChicaService.precuadre(Number(sucursalId));
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaChicaService.precuadre(Number(sucursalId));
         } catch (error) {
             this.handleError(error, 'Error al obtener precuadre de caja chica');
         }
@@ -110,12 +106,7 @@ export class CajaChicaController {
         try {
             console.log('📥 POST /caja-chica/cuadrar - UsuarioID:', usuarioID, 'SucursalID:', sucursalId);
             console.log('   Body:', JSON.stringify(dto, null, 2));
-            const result = await this.cajaChicaService.cuadrarCajaChica(usuarioID, sucursalId, dto);
-            return {
-                success: true,
-                message: 'Cuadre de caja chica realizado exitosamente',
-                data: result,
-            };
+            return this.cajaChicaService.cuadrarCajaChica(usuarioID, sucursalId, dto);
         } catch (error) {
             this.handleError(error, 'Error al cuadrar caja chica');
         }
@@ -125,11 +116,7 @@ export class CajaChicaController {
     @Get('historial')
     async historial() {
         try {
-            const result = await this.cajaChicaService.historial();
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaChicaService.historial();
         } catch (error) {
             this.handleError(error, 'Error al obtener historial de caja chica');
         }
@@ -140,11 +127,7 @@ export class CajaChicaController {
     async generarCodigo(@Param('id', ParseIntPipe) id: number) {
         try {
             console.log('📥 GET /caja-chica/:id/codigo - ID:', id);
-            const result = await this.cajaChicaService.generarCodigoAutorizacion(id);
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaChicaService.generarCodigoAutorizacion(id);
         } catch (error) {
             this.handleError(error, 'Error al generar código de autorización');
         }
@@ -170,12 +153,7 @@ export class CajaChicaController {
                 throw new BadRequestException('El motivo de cancelación es obligatorio');
             }
 
-            const result = await this.cajaChicaService.cancelarCuadre(id, usuario, codigo, motivo);
-            return {
-                success: true,
-                message: 'Cuadre de caja chica cancelado exitosamente',
-                data: result,
-            };
+            return this.cajaChicaService.cancelarCuadre(id, usuario, codigo, motivo);
         } catch (error) {
             this.handleError(error, 'Error al cancelar cuadre de caja chica');
         }
@@ -189,11 +167,7 @@ export class CajaChicaController {
         @Query('hasta') hasta?: string,
     ) {
         try {
-            const result = await this.cajaChicaService.listarPorEstatus(estatus, { desde, hasta });
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaChicaService.listarPorEstatus(estatus, { desde, hasta });
         } catch (error) {
             this.handleError(error, 'Error al listar cuadres por estatus');
         }
@@ -231,12 +205,7 @@ export class CajaChicaController {
             }
 
             const usuarioEdicion = body.usuarioEdicion || 'sistema';
-            const result = await this.cajaChicaService.actualizarCapturables(id, body, usuarioEdicion);
-            return {
-                success: true,
-                message: 'Capturables actualizados exitosamente',
-                data: result,
-            };
+            return this.cajaChicaService.actualizarCapturables(id, body, usuarioEdicion);
         } catch (error) {
             this.handleError(error, 'Error al actualizar capturables');
         }

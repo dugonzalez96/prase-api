@@ -95,11 +95,7 @@ export class CajaGeneralController {
                 fecha,
                 sucursalId: sucursalId ? Number(sucursalId) : undefined,
             };
-            const result = await this.cajaGeneralService.getDashboard(dto);
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaGeneralService.getDashboard(dto);
         } catch (error) {
             this.handleError(error, 'Error al obtener dashboard de caja general');
         }
@@ -116,11 +112,7 @@ export class CajaGeneralController {
                 fecha,
                 sucursalId: sucursalId ? Number(sucursalId) : undefined,
             };
-            const result = await this.cajaGeneralService.getPreCuadre(dto);
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaGeneralService.getPreCuadre(dto);
         } catch (error) {
             this.handleError(error, 'Error al obtener pre-cuadre de caja general');
         }
@@ -150,12 +142,7 @@ export class CajaGeneralController {
                 throw new BadRequestException('El saldo real no puede ser negativo');
             }
 
-            const result = await this.cajaGeneralService.cuadrarCajaGeneral(body);
-            return {
-                success: true,
-                message: 'Cuadre de caja general realizado exitosamente',
-                data: result,
-            };
+            return this.cajaGeneralService.cuadrarCajaGeneral(body);
         } catch (error) {
             this.handleError(error, 'Error al cuadrar caja general');
         }
@@ -167,12 +154,7 @@ export class CajaGeneralController {
     ) {
         try {
             console.log('📥 POST /caja-general/movimientos');
-            const result = await this.cajaGeneralService.crearMovimientoCajaGeneral(body);
-            return {
-                success: true,
-                message: 'Movimiento de caja general creado exitosamente',
-                data: result,
-            };
+            return this.cajaGeneralService.crearMovimientoCajaGeneral(body);
         } catch (error) {
             this.handleError(error, 'Error al crear movimiento de caja general');
         }
@@ -183,11 +165,7 @@ export class CajaGeneralController {
         @Query() query: GetMovimientosCajaGeneralDto,
     ) {
         try {
-            const result = await this.cajaGeneralService.listarMovimientosCajaGeneral(query);
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaGeneralService.listarMovimientosCajaGeneral(query);
         } catch (error) {
             this.handleError(error, 'Error al listar movimientos de caja general');
         }
@@ -201,11 +179,7 @@ export class CajaGeneralController {
     async generarCodigoAutorizacion(@Param('id', ParseIntPipe) id: number) {
         try {
             console.log('📥 GET /caja-general/:id/codigo - ID:', id);
-            const result = await this.cajaGeneralService.generarCodigoAutorizacion(id);
-            return {
-                success: true,
-                data: result,
-            };
+            return this.cajaGeneralService.generarCodigoAutorizacion(id);
         } catch (error) {
             this.handleError(error, 'Error al generar código de autorización');
         }
@@ -230,12 +204,7 @@ export class CajaGeneralController {
                 throw new BadRequestException('El motivo de cancelación es obligatorio');
             }
 
-            const result = await this.cajaGeneralService.cancelarCuadre(id, usuario, codigo, motivo);
-            return {
-                success: true,
-                message: 'Cuadre de caja general cancelado exitosamente',
-                data: result,
-            };
+            return this.cajaGeneralService.cancelarCuadre(id, usuario, codigo, motivo);
         } catch (error) {
             this.handleError(error, 'Error al cancelar cuadre de caja general');
         }
