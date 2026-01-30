@@ -57,15 +57,27 @@ export class CortesUsuariosService {
    * Usa el nombre del método de pago (string) en lugar de IDs hardcodeados,
    * para evitar errores si los IDs cambian en la tabla MetodosPago.
    */
-  private clasificarMetodoPago(pago: PagosPoliza): 'Efectivo' | 'Tarjeta' | 'Transferencia' | 'Desconocido' {
-    const nombre = (pago.MetodoPago?.NombreMetodo || '').toLowerCase().trim();
+  private clasificarMetodoPago(pago: PagosPoliza): 'Efectivo' | 'Tarjeta' | 'Transferencia' {
+    const nombre = (pago.MetodoPago?.NombreMetodo || '').trim();
+    const id = pago.MetodoPago?.IDMetodoPago;
 
-    if (nombre.includes('efectivo')) return 'Efectivo';
-    if (nombre.includes('tarjeta') || nombre.includes('credito') || nombre.includes('crédito') || nombre.includes('debito') || nombre.includes('débito')) return 'Tarjeta';
-    if (nombre.includes('transferencia') || nombre.includes('deposito') || nombre.includes('depósito') || nombre.includes('spei')) return 'Transferencia';
+    // Clasificación por nombre exacto del catálogo
+    if (nombre === 'Efectivo') return 'Efectivo';
+    if (nombre === 'Tarjeta de Crédito' || nombre === 'Tarjeta de Débito') return 'Tarjeta';
+    if (nombre === 'Transferencia Bancaria') return 'Transferencia';
 
-    // Fallback: si no se reconoce el nombre, loguear advertencia
-    console.warn(`⚠️ Método de pago no reconocido: ID=${pago.MetodoPago?.IDMetodoPago}, Nombre="${pago.MetodoPago?.NombreMetodo}". Se clasificará como Efectivo por defecto.`);
+    // Fallback por ID del catálogo (3=Efectivo, 1=TarjetaCrédito, 4=TarjetaDébito, 2=Transferencia)
+    if (id === 3) return 'Efectivo';
+    if (id === 1 || id === 4) return 'Tarjeta';
+    if (id === 2) return 'Transferencia';
+
+    // Fallback flexible por nombre parcial
+    const nombreLower = nombre.toLowerCase();
+    if (nombreLower.includes('efectivo')) return 'Efectivo';
+    if (nombreLower.includes('tarjeta')) return 'Tarjeta';
+    if (nombreLower.includes('transferencia')) return 'Transferencia';
+
+    console.warn(`⚠️ Método de pago no reconocido: ID=${id}, Nombre="${nombre}". Se clasificará como Efectivo por defecto.`);
     return 'Efectivo';
   }
 
@@ -661,6 +673,7 @@ export class CortesUsuariosService {
       .leftJoin('t.UsuarioCreo', 'u')
       .where('u.UsuarioID = :usuarioID', { usuarioID })
       .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
+      .andWhere('t.CorteUsuarioID IS NULL')
       .andWhere('t.FormaPago IN (:...formasPago)', { formasPago: ['Transferencia', 'Deposito', 'Tarjeta'] })
       .andWhere('t.Validado = :validado', { validado: false })
       .getMany();
@@ -678,6 +691,7 @@ export class CortesUsuariosService {
       .where('t.TipoTransaccion = :tipo', { tipo: 'Ingreso' })
       .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
       .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
+      .andWhere('t.CorteUsuarioID IS NULL')
       .getMany();
 
     const egresos = await this.transaccionesRepository
@@ -686,6 +700,7 @@ export class CortesUsuariosService {
       .where('t.TipoTransaccion = :tipo', { tipo: 'Egreso' })
       .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
       .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
+      .andWhere('t.CorteUsuarioID IS NULL')
       .getMany();
 
     const pagosPoliza = await this.pagosPolizaRepository
@@ -695,6 +710,7 @@ export class CortesUsuariosService {
       .where('p.MotivoCancelacion IS NULL')
       .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
       .andWhere('DATE(p.FechaPago) >= :fecha', { fecha: fechaBusqueda })
+      .andWhere('p.CorteUsuarioID IS NULL')
       .getMany();
 
     console.log('📊 Resultados de consultas:', {
@@ -1347,11 +1363,12 @@ export class CortesUsuariosService {
     //inicioCaja.Estatus = 'Cerrado';
     //await this.iniciosCajaRepository.save(inicioCaja);
 
-    // 🔗 Amarrar Transacciones y PagosPoliza a este corte
+    // 🔗 Amarrar Transacciones y PagosPoliza a este corte (solo las que NO tienen corte asignado)
     const transaccionesDelCorte = await this.transaccionesRepository.find({
       where: {
         UsuarioCreo: { UsuarioID: usuarioID },
         FechaTransaccion: Between(hoy, mañana),
+        CorteUsuario: IsNull(),
       },
     });
 
@@ -1366,7 +1383,8 @@ export class CortesUsuariosService {
       where: {
         Usuario: { UsuarioID: usuarioID },
         FechaPago: Between(hoy, mañana),
-        MotivoCancelacion: null,
+        MotivoCancelacion: IsNull(),
+        CorteUsuario: IsNull(),
       },
     });
 

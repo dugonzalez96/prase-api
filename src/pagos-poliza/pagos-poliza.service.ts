@@ -230,13 +230,24 @@ export class PagosPolizaService {
     // Incrementar TotalPagos en la póliza
     await this.incrementarTotalPagos(PolizaID);
 
-    // Si es el primer pago y la póliza está en PERIODO DE GRACIA o PAGO INMEDIATO, cambiar a ACTIVA
+    // Actualizar estado de póliza al recibir pago
     if (
-      pagosRealizados.length === 0 &&
       ESTADOS_REQUIEREN_PRIMER_PAGO.includes(EstadoPoliza as any)
     ) {
       poliza.EstadoPoliza = ESTADOS_POLIZA.ACTIVA;
       await this.polizasRepository.save(poliza);
+    } else if (EstadoPoliza === ESTADOS_POLIZA.VENCIDA) {
+      // Para VENCIDA, reactivar solo si el saldo queda cubierto
+      const totalPagadoConNuevo = pagosRealizados.reduce(
+        (sum, pago) => sum + (Number(pago.MontoPagado) || 0),
+        0,
+      ) + MontoPagado;
+      const saldoRestante = PrimaTotal - totalPagadoConNuevo;
+
+      if (saldoRestante <= 0.01) {
+        poliza.EstadoPoliza = ESTADOS_POLIZA.ACTIVA;
+        await this.polizasRepository.save(poliza);
+      }
     }
 
     const bitacora = this.bitacoraEdicionesRepository.create({

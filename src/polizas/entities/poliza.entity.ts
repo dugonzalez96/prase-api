@@ -26,11 +26,11 @@ export class Poliza {
 
   @Column({
     type: 'enum',
-    enum: ['PERIODO DE GRACIA', 'PAGO INMEDIATO', 'ACTIVA', 'CANCELADA', 'PENDIENTE'],
+    enum: ['PERIODO DE GRACIA', 'PAGO INMEDIATO', 'ACTIVA', 'CANCELADA', 'PENDIENTE', 'VENCIDA'],
     nullable: true,
-    default: 'ACTIVA',
+    default: 'PENDIENTE',
   })
-  EstadoPoliza: 'PERIODO DE GRACIA' | 'PAGO INMEDIATO' | 'ACTIVA' | 'CANCELADA' | 'PENDIENTE';
+  EstadoPoliza: 'PERIODO DE GRACIA' | 'PAGO INMEDIATO' | 'ACTIVA' | 'CANCELADA' | 'PENDIENTE' | 'VENCIDA';
 
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   PrimaTotal: number;

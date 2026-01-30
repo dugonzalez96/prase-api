@@ -23,6 +23,11 @@ export class PolizasController {
     return this.polizasService.create(createPolizaDto);
   }
 
+  @Post('actualizar-estados')
+  async actualizarEstados() {
+    return this.polizasService.actualizarEstadosPolizas();
+  }
+
   @Get()
   findAll() {
     return this.polizasService.findAll();

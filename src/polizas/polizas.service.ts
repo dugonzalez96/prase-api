@@ -1,6 +1,6 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { DetallesCotizacionPoliza } from 'src/cotizaciones/entities/detalle-cotizacion-poliza.entity';
 import { BitacoraEliminacionesService } from 'src/bitacora-eliminaciones/bitacora-eliminaciones.service';
 import { BitacoraEdicionesService } from 'src/bitacora-ediciones/bitacora-ediciones.service';
@@ -585,7 +585,10 @@ export class PolizasService {
 
     if (!poliza) throw new HttpException('Póliza no encontrada', HttpStatus.NOT_FOUND);
 
-    // Validar que la póliza esté en estado vigente (permite PAGO INMEDIATO, PERIODO DE GRACIA o ACTIVA)
+    // Actualizar estado antes de generar esquema
+    await this.actualizarEstadoPoliza(poliza);
+
+    // Validar que la póliza esté en estado vigente
     if (!ESTADOS_VIGENTES.includes(poliza.EstadoPoliza as any)) {
       throw new HttpException(
         'La póliza no está activa y no se puede generar el esquema de pagos',
@@ -615,7 +618,9 @@ export class PolizasService {
     let mensajeAtraso: string | null = null;
 
     // Verificar si la póliza requiere pago inmediato
-    if (poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO) {
+    if (poliza.EstadoPoliza === ESTADOS_POLIZA.VENCIDA) {
+      mensajeAtraso = 'PÓLIZA VENCIDA: Se requiere pago inmediato para reactivarla.';
+    } else if (poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO) {
       mensajeAtraso = 'Esta póliza requiere PAGO INMEDIATO para activarse. No se ha realizado el primer pago.';
     } else if (poliza.EstadoPoliza === ESTADOS_POLIZA.PERIODO_GRACIA) {
       const fechaInicioPoliza = new Date(poliza.FechaInicio);
@@ -942,5 +947,122 @@ export class PolizasService {
       poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO ||
       poliza.EstadoPoliza === ESTADOS_POLIZA.PERIODO_GRACIA
     );
+  }
+
+  /**
+   * Actualiza el estado de una póliza individual basado en pagos y fechas
+   * @private - Llamado internamente desde generarEsquemaPagos()
+   */
+  private async actualizarEstadoPoliza(poliza: Poliza): Promise<void> {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    const pagosRealizados = await this.pagosPolizaRepository.count({
+      where: {
+        PolizaID: poliza.PolizaID,
+        EstatusPago: { IDEstatusPago: 1 },
+      },
+    });
+
+    const primerPagoRecibido = pagosRealizados > 0;
+    const periodoGracia = Number(poliza.cotizacion?.PeriodoGracia || 0);
+    const fechaInicio = new Date(poliza.FechaInicio);
+    const fechaLimiteGracia = new Date(fechaInicio);
+    fechaLimiteGracia.setDate(fechaLimiteGracia.getDate() + periodoGracia);
+
+    let estadoNuevo = poliza.EstadoPoliza;
+
+    if (
+      primerPagoRecibido &&
+      [ESTADOS_POLIZA.PENDIENTE, ESTADOS_POLIZA.PAGO_INMEDIATO, ESTADOS_POLIZA.PERIODO_GRACIA].includes(poliza.EstadoPoliza as any)
+    ) {
+      estadoNuevo = ESTADOS_POLIZA.ACTIVA;
+    } else if (
+      !primerPagoRecibido &&
+      hoy > fechaLimiteGracia &&
+      [ESTADOS_POLIZA.PENDIENTE, ESTADOS_POLIZA.PERIODO_GRACIA, ESTADOS_POLIZA.PAGO_INMEDIATO].includes(poliza.EstadoPoliza as any)
+    ) {
+      estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+    }
+
+    if (estadoNuevo !== poliza.EstadoPoliza) {
+      poliza.EstadoPoliza = estadoNuevo as any;
+      await this.polizasRepository.save(poliza);
+    }
+  }
+
+  /**
+   * Actualiza masivamente los estados de todas las pólizas vigentes
+   * Endpoint manual: POST /polizas/actualizar-estados
+   */
+  async actualizarEstadosPolizas(): Promise<any> {
+    const polizas = await this.polizasRepository.find({
+      where: {
+        EstadoPoliza: In([
+          ESTADOS_POLIZA.PENDIENTE,
+          ESTADOS_POLIZA.PAGO_INMEDIATO,
+          ESTADOS_POLIZA.PERIODO_GRACIA,
+          ESTADOS_POLIZA.ACTIVA,
+        ]),
+      },
+      relations: ['cotizacion'],
+    });
+
+    const actualizaciones = [];
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    for (const poliza of polizas) {
+      const estadoAnterior = poliza.EstadoPoliza;
+      let estadoNuevo = estadoAnterior;
+
+      const pagosRealizados = await this.pagosPolizaRepository.count({
+        where: {
+          PolizaID: poliza.PolizaID,
+          EstatusPago: { IDEstatusPago: 1 },
+        },
+      });
+
+      const primerPagoRecibido = pagosRealizados > 0;
+
+      const fechaInicio = new Date(poliza.FechaInicio);
+      const periodoGracia = Number(poliza.cotizacion?.PeriodoGracia || 0);
+      const fechaLimiteGracia = new Date(fechaInicio);
+      fechaLimiteGracia.setDate(fechaLimiteGracia.getDate() + periodoGracia);
+
+      const fechaEmision = new Date(poliza.FechaEmision);
+      const fechaLimitePagoInmediato = new Date(fechaEmision);
+      fechaLimitePagoInmediato.setDate(fechaLimitePagoInmediato.getDate() + 2);
+
+      if (
+        primerPagoRecibido &&
+        [ESTADOS_POLIZA.PENDIENTE, ESTADOS_POLIZA.PAGO_INMEDIATO, ESTADOS_POLIZA.PERIODO_GRACIA].includes(estadoAnterior as any)
+      ) {
+        estadoNuevo = ESTADOS_POLIZA.ACTIVA;
+      } else if (estadoAnterior === ESTADOS_POLIZA.PAGO_INMEDIATO && !primerPagoRecibido && hoy > fechaLimitePagoInmediato) {
+        estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+      } else if (estadoAnterior === ESTADOS_POLIZA.PERIODO_GRACIA && !primerPagoRecibido && hoy > fechaLimiteGracia) {
+        estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+      } else if (estadoAnterior === ESTADOS_POLIZA.PENDIENTE && !primerPagoRecibido && hoy > fechaLimiteGracia) {
+        estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+      }
+
+      if (estadoNuevo !== estadoAnterior) {
+        poliza.EstadoPoliza = estadoNuevo as any;
+        await this.polizasRepository.save(poliza);
+
+        actualizaciones.push({
+          polizaId: poliza.PolizaID,
+          numeroPoliza: poliza.NumeroPoliza,
+          estadoAnterior,
+          estadoNuevo,
+        });
+      }
+    }
+
+    return {
+      total: actualizaciones.length,
+      polizas: actualizaciones,
+    };
   }
 }
