@@ -110,6 +110,26 @@ export class CortesUsuariosService {
     return partes.length > 0 ? partes.join(' ') : usuario.NombreUsuario || 'N/A';
   }
 
+  // Timezone helpers (mismo patrón que caja-general.service.ts)
+  private getTimezoneOffset(timezone?: string): string {
+    if (!timezone) return '-07:00';
+    const timezoneMap: Record<string, string> = {
+      'America/Mazatlan': '-07:00',
+      'America/Mexico_City': '-06:00',
+      'America/Hermosillo': '-07:00',
+      'America/Chihuahua': '-06:00',
+      'America/Tijuana': '-08:00',
+    };
+    return timezoneMap[timezone] || '-07:00';
+  }
+
+  private convertUTCToLocal(dateUTC: Date, timezoneOffset: string): Date {
+    if (!dateUTC) return dateUTC;
+    const [hours, minutes] = timezoneOffset.split(':').map(Number);
+    const offsetMinutes = hours * 60 + (hours < 0 ? -minutes : minutes);
+    return new Date(dateUTC.getTime() + offsetMinutes * 60000);
+  }
+
   async getAllCortes(): Promise<any[]> {
     const cortes = await this.cortesUsuariosRepository.find({
       relations: [
@@ -123,16 +143,21 @@ export class CortesUsuariosService {
     });
 
     // 🔹 Mapear para incluir campos de auditoría con nombre completo del empleado
-    return cortes.map((corte) => ({
-      ...corte,
-      // Información de auditoría con nombre completo
-      corteDe: this.getNombreCompletoEmpleado(corte.usuarioID),
-      creadoPor: corte.UsuarioCreador
-        ? this.getNombreCompletoEmpleado(corte.UsuarioCreador)
-        : this.getNombreCompletoEmpleado(corte.usuarioID),
-      usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
-      usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
-    }));
+    return cortes.map((corte) => {
+      const offset = this.getTimezoneOffset(corte.Sucursal?.Timezone);
+      return {
+        ...corte,
+        FechaCorte: this.convertUTCToLocal(corte.FechaCorte, offset),
+        FechaActualizacion: this.convertUTCToLocal(corte.FechaActualizacion, offset),
+        // Información de auditoría con nombre completo
+        corteDe: this.getNombreCompletoEmpleado(corte.usuarioID),
+        creadoPor: corte.UsuarioCreador
+          ? this.getNombreCompletoEmpleado(corte.UsuarioCreador)
+          : this.getNombreCompletoEmpleado(corte.usuarioID),
+        usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
+        usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
+      };
+    });
   }
 
   /**
@@ -165,43 +190,58 @@ export class CortesUsuariosService {
     });
 
     // 🔹 Mapear para incluir campos de auditoría con nombre completo del empleado
-    return cortes.map((corte) => ({
-      ...corte,
-      corteDe: this.getNombreCompletoEmpleado(corte.usuarioID),
-      creadoPor: corte.UsuarioCreador
-        ? this.getNombreCompletoEmpleado(corte.UsuarioCreador)
-        : this.getNombreCompletoEmpleado(corte.usuarioID),
-      usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
-      usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
-    }));
+    return cortes.map((corte) => {
+      const offset = this.getTimezoneOffset(corte.Sucursal?.Timezone);
+      return {
+        ...corte,
+        FechaCorte: this.convertUTCToLocal(corte.FechaCorte, offset),
+        FechaActualizacion: this.convertUTCToLocal(corte.FechaActualizacion, offset),
+        corteDe: this.getNombreCompletoEmpleado(corte.usuarioID),
+        creadoPor: corte.UsuarioCreador
+          ? this.getNombreCompletoEmpleado(corte.UsuarioCreador)
+          : this.getNombreCompletoEmpleado(corte.usuarioID),
+        usuarioIdCorte: corte.usuarioID?.UsuarioID || null,
+        usuarioIdCreador: corte.UsuarioCreador?.UsuarioID || corte.usuarioID?.UsuarioID || null,
+      };
+    });
   }
 
   /**
    * 🔹 Obtener cortes de caja con estatus "Cancelado" por usuario
    */
   async getCorteCanceladoByUser(usuarioID: number): Promise<CortesUsuarios[]> {
-    return this.cortesUsuariosRepository.find({
+    const cortes = await this.cortesUsuariosRepository.find({
       where: {
-        usuarioID: { UsuarioID: usuarioID }, // ✅ Buscar directamente en la relación con usuarios
+        usuarioID: { UsuarioID: usuarioID },
         Estatus: 'Cancelado',
       },
-      relations: ['usuarioID'], // ✅ Asegurar que se cargue la relación con usuarios
+      relations: ['usuarioID', 'Sucursal'],
       order: { FechaCorte: 'DESC' },
     });
+    cortes.forEach((c) => {
+      const offset = this.getTimezoneOffset(c.Sucursal?.Timezone);
+      c.FechaCorte = this.convertUTCToLocal(c.FechaCorte, offset);
+    });
+    return cortes;
   }
 
   /**
    * 🔹 Obtener cortes de caja con estatus "Cerrado" por usuario
    */
   async getCorteCerradoByUser(usuarioID: number): Promise<CortesUsuarios[]> {
-    return this.cortesUsuariosRepository.find({
+    const cortes = await this.cortesUsuariosRepository.find({
       where: {
-        usuarioID: { UsuarioID: usuarioID }, // ✅ Buscar directamente por usuarioID
+        usuarioID: { UsuarioID: usuarioID },
         Estatus: 'Cerrado',
       },
-      relations: ['usuarioID', 'InicioCaja'],
+      relations: ['usuarioID', 'InicioCaja', 'Sucursal'],
       order: { FechaCorte: 'DESC' },
     });
+    cortes.forEach((c) => {
+      const offset = this.getTimezoneOffset(c.Sucursal?.Timezone);
+      c.FechaCorte = this.convertUTCToLocal(c.FechaCorte, offset);
+    });
+    return cortes;
   }
 
   /**
@@ -215,15 +255,20 @@ export class CortesUsuariosService {
     const mañana = new Date(hoy);
     mañana.setDate(mañana.getDate() + 1);
 
-    return this.cortesUsuariosRepository.findOne({
+    const corte = await this.cortesUsuariosRepository.findOne({
       where: {
-        usuarioID: { UsuarioID: usuarioID }, // ✅ Buscar el usuario directamente en la entidad
-        FechaCorte: Between(hoy, mañana), // 🔹 Solo el corte del día actual
+        usuarioID: { UsuarioID: usuarioID },
+        FechaCorte: Between(hoy, mañana),
         Estatus: 'Cerrado',
       },
-      relations: ['usuarioID', 'InicioCaja'],
+      relations: ['usuarioID', 'InicioCaja', 'Sucursal'],
       order: { FechaCorte: 'DESC' },
     });
+    if (corte) {
+      const offset = this.getTimezoneOffset(corte.Sucursal?.Timezone);
+      corte.FechaCorte = this.convertUTCToLocal(corte.FechaCorte, offset);
+    }
+    return corte;
   }
 
   /**
@@ -232,7 +277,7 @@ export class CortesUsuariosService {
   async getCorteById(corteID: number): Promise<CortesUsuarios> {
     const corte = await this.cortesUsuariosRepository.findOne({
       where: { CorteUsuarioID: corteID },
-      relations: ['usuarioID', 'InicioCaja'], // ✅ Asegurar que cargue el usuario
+      relations: ['usuarioID', 'InicioCaja', 'Sucursal'],
     });
 
     if (!corte) {
@@ -241,6 +286,8 @@ export class CortesUsuariosService {
         HttpStatus.NOT_FOUND,
       );
     }
+    const offset = this.getTimezoneOffset(corte.Sucursal?.Timezone);
+    corte.FechaCorte = this.convertUTCToLocal(corte.FechaCorte, offset);
     return corte;
   }
 
@@ -259,11 +306,16 @@ export class CortesUsuariosService {
    * 🔹 Obtener todos los cortes de caja de un usuario
    */
   async getCortesByUsuario(usuarioID: number): Promise<CortesUsuarios[]> {
-    return this.cortesUsuariosRepository.find({
-      where: { usuarioID: { UsuarioID: usuarioID } }, // ✅ Relación directa con usuario
-      relations: ['usuarioID', 'InicioCaja'],
+    const cortes = await this.cortesUsuariosRepository.find({
+      where: { usuarioID: { UsuarioID: usuarioID } },
+      relations: ['usuarioID', 'InicioCaja', 'Sucursal'],
       order: { FechaCorte: 'DESC' },
     });
+    cortes.forEach((c) => {
+      const offset = this.getTimezoneOffset(c.Sucursal?.Timezone);
+      c.FechaCorte = this.convertUTCToLocal(c.FechaCorte, offset);
+    });
+    return cortes;
   }
 
   /**
@@ -643,6 +695,7 @@ export class CortesUsuariosService {
 
     const inicioCaja = await this.iniciosCajaRepository.findOne({
       where: { Usuario: { UsuarioID: usuarioID } },
+      relations: ['Sucursal'],
     });
 
     if (!inicioCaja) {
@@ -651,6 +704,8 @@ export class CortesUsuariosService {
         HttpStatus.BAD_REQUEST,
       );
     }
+
+    const timezoneOffset = this.getTimezoneOffset(inicioCaja.Sucursal?.Timezone);
 
     let fechaReferencia: Date;
     if (ultimoCorte) {
@@ -891,13 +946,13 @@ export class CortesUsuariosService {
       DetalleIngresos: ingresos.map((t) => ({
         Monto: Number(Number(t.Monto).toFixed(2)),
         FormaPago: t.FormaPago,
-        Fecha: t.FechaTransaccion,
+        Fecha: this.convertUTCToLocal(t.FechaTransaccion, timezoneOffset),
         Descripcion: t.Descripcion,
       })),
       DetalleEgresos: egresos.map((t) => ({
         Monto: t.Monto,
         FormaPago: t.FormaPago,
-        Fecha: t.FechaTransaccion,
+        Fecha: this.convertUTCToLocal(t.FechaTransaccion, timezoneOffset),
         Descripcion: t.Descripcion,
       })),
       DetallePagosPoliza: pagosPoliza.map((p) => {
@@ -905,7 +960,7 @@ export class CortesUsuariosService {
         return {
           MontoPagado: p.MontoPagado,
           MetodoPago: p.MetodoPago?.NombreMetodo,
-          FechaPago: p.FechaPago,
+          FechaPago: this.convertUTCToLocal(p.FechaPago, timezoneOffset),
           Poliza: poliza
             ? {
               PolizaID: poliza.PolizaID,
@@ -924,7 +979,7 @@ export class CortesUsuariosService {
     // 🔹 Buscar el corte de caja por ID
     const corte = await this.cortesUsuariosRepository.findOne({
       where: { CorteUsuarioID: corteID },
-      relations: ['usuarioID', 'InicioCaja'], // Cargamos relaciones necesarias
+      relations: ['usuarioID', 'InicioCaja', 'Sucursal'],
     });
 
     if (!corte) {
@@ -933,6 +988,8 @@ export class CortesUsuariosService {
         HttpStatus.NOT_FOUND,
       );
     }
+
+    const historialTimezone = this.getTimezoneOffset(corte.Sucursal?.Timezone);
 
     // 🔹 Definir el rango de fecha basado en el `FechaCorte`
     const fechaInicio = new Date(corte.FechaCorte);
@@ -1067,7 +1124,7 @@ export class CortesUsuariosService {
       DetalleIngresos: ingresos.map((t) => ({
         Monto: t.Monto,
         FormaPago: t.FormaPago,
-        Fecha: t.FechaTransaccion,
+        Fecha: this.convertUTCToLocal(t.FechaTransaccion, historialTimezone),
         Descripcion: t.Descripcion,
       })),
 
@@ -1075,7 +1132,7 @@ export class CortesUsuariosService {
       DetalleEgresos: egresos.map((t) => ({
         Monto: t.Monto,
         FormaPago: t.FormaPago,
-        Fecha: t.FechaTransaccion,
+        Fecha: this.convertUTCToLocal(t.FechaTransaccion, historialTimezone),
         Descripcion: t.Descripcion,
       })),
       // 🔹 **Desglose de Pagos de Póliza**
@@ -1084,7 +1141,7 @@ export class CortesUsuariosService {
         return {
           MontoPagado: p.MontoPagado,
           MetodoPago: p.MetodoPago?.NombreMetodo,
-          FechaPago: p.FechaPago,
+          FechaPago: this.convertUTCToLocal(p.FechaPago, historialTimezone),
           Poliza: poliza
             ? {
               PolizaID: poliza.PolizaID,

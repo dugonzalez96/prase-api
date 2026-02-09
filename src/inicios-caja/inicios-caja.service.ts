@@ -34,16 +34,41 @@ export class IniciosCajaService {
     private readonly bitacoraEliminacionesRepository: Repository<BitacoraEliminaciones>,
   ) { }
 
+  // Timezone helpers (mismo patrón que caja-general.service.ts)
+  private getTimezoneOffset(timezone?: string): string {
+    if (!timezone) return '-07:00';
+    const timezoneMap: Record<string, string> = {
+      'America/Mazatlan': '-07:00',
+      'America/Mexico_City': '-06:00',
+      'America/Hermosillo': '-07:00',
+      'America/Chihuahua': '-06:00',
+      'America/Tijuana': '-08:00',
+    };
+    return timezoneMap[timezone] || '-07:00';
+  }
+
+  private convertUTCToLocal(dateUTC: Date, timezoneOffset: string): Date {
+    if (!dateUTC) return dateUTC;
+    const [hours, minutes] = timezoneOffset.split(':').map(Number);
+    const offsetMinutes = hours * 60 + (hours < 0 ? -minutes : minutes);
+    return new Date(dateUTC.getTime() + offsetMinutes * 60000);
+  }
+
   async findAll(): Promise<IniciosCaja[]> {
-    return this.iniciosCajaRepository.find({
-      relations: ['Usuario', 'UsuarioAutorizo'],
+    const inicios = await this.iniciosCajaRepository.find({
+      relations: ['Usuario', 'UsuarioAutorizo', 'Sucursal'],
     });
+    inicios.forEach((i) => {
+      const offset = this.getTimezoneOffset(i.Sucursal?.Timezone);
+      i.FechaInicio = this.convertUTCToLocal(i.FechaInicio, offset);
+    });
+    return inicios;
   }
 
   async findOne(id: number): Promise<IniciosCaja> {
     const inicioCaja = await this.iniciosCajaRepository.findOne({
       where: { InicioCajaID: id },
-      relations: ['Usuario', 'UsuarioAutorizo'],
+      relations: ['Usuario', 'UsuarioAutorizo', 'Sucursal'],
     });
     if (!inicioCaja) {
       throw new HttpException(
@@ -51,6 +76,8 @@ export class IniciosCajaService {
         HttpStatus.NOT_FOUND,
       );
     }
+    const offset = this.getTimezoneOffset(inicioCaja.Sucursal?.Timezone);
+    inicioCaja.FechaInicio = this.convertUTCToLocal(inicioCaja.FechaInicio, offset);
     return inicioCaja;
   }
 
@@ -414,16 +441,19 @@ export class IniciosCajaService {
         Usuario: { UsuarioID: usuarioID },
         FechaInicio: Between(todayStart, todayEnd),
       },
-      relations: ['Usuario', 'UsuarioAutorizo'],
+      relations: ['Usuario', 'UsuarioAutorizo', 'Sucursal'],
     });
-  
+
     if (!inicioActivo) {
       throw new HttpException(
         'No hay ningún inicio de caja activo para este usuario el día de hoy',
         HttpStatus.NOT_FOUND,
       );
     }
-  
+
+    const offset = this.getTimezoneOffset(inicioActivo.Sucursal?.Timezone);
+    inicioActivo.FechaInicio = this.convertUTCToLocal(inicioActivo.FechaInicio, offset);
+
     return inicioActivo;
   }
   

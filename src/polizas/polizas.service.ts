@@ -579,10 +579,6 @@ export class PolizasService {
       relations: ['detalles', 'historial', 'tipoPago', 'cotizacion'],
     });
 
-    console.log('Póliza completa:', poliza);
-    console.log('Tipo de Pago:', poliza?.tipoPago);
-    console.log('Porcentaje Ajuste:', poliza?.tipoPago?.PorcentajeAjuste);
-
     if (!poliza) throw new HttpException('Póliza no encontrada', HttpStatus.NOT_FOUND);
 
     // Actualizar estado antes de generar esquema
@@ -602,10 +598,7 @@ export class PolizasService {
     const periodoGracia = Number(poliza.cotizacion?.PeriodoGracia || 0);
     const numeroPagos = Number(poliza.NumeroPagos);
     const primaTotal = Number(poliza.PrimaTotal);
-    const totalSinIVA = Number(poliza.TotalSinIVA);
-    const derechoPolizaAplicado = Number(poliza.DerechoPolizaAplicado || 0);
     const descuentoProntoPago = Number(poliza.DescuentoProntoPago || 0);
-    const porcentajeAjuste = Number(poliza.tipoPago?.PorcentajeAjuste || 0);
 
     if (!poliza.FechaEmision || isNaN(numeroPagos) || isNaN(primaTotal) || numeroPagos <= 0) {
       throw new HttpException(
@@ -614,10 +607,9 @@ export class PolizasService {
       );
     }
 
-    // 2) Periodo de gracia o pago inmediato (mensaje)
+    // 2) Mensaje de estado según situación de la póliza
     let mensajeAtraso: string | null = null;
 
-    // Verificar si la póliza requiere pago inmediato
     if (poliza.EstadoPoliza === ESTADOS_POLIZA.VENCIDA) {
       mensajeAtraso = 'PÓLIZA VENCIDA: Se requiere pago inmediato para reactivarla.';
     } else if (poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO) {
@@ -635,117 +627,136 @@ export class PolizasService {
       }
     }
 
-    // 3) Cálculos base (tu fórmula original)
-    const ajusteDecimal = 1 + porcentajeAjuste / 100;
-    const totalPorPago = totalSinIVA / numeroPagos;
-    const totalConDerechoPoliza = totalPorPago + derechoPolizaAplicado;
-    const totalConAjuste = totalConDerechoPoliza * ajusteDecimal;
-    const totalConIVA = totalConAjuste * 1.16;
+    // 3) Distribución equitativa de pagos desde primaTotal
+    const montoBase = Math.floor((primaTotal / numeroPagos) * 100) / 100;
+    const totalBase = round2(montoBase * numeroPagos);
+    const diferenciaCentavos = round2(primaTotal - totalBase);
 
-    const primerPago = round2(totalConIVA);
-    const pagosSubsecuentes = numeroPagos > 1 ? round2((primaTotal - primerPago) / (numeroPagos - 1)) : round2(primaTotal);
+    // El primer pago absorbe la diferencia de centavos por redondeo
+    const primerPago = round2(montoBase + diferenciaCentavos);
+    const pagosSubsecuentes = montoBase;
 
-    // 4) Construcción de fechas objetivo (usa tu frecuencia: 12/numeroPagos meses)
+    // 4) Construcción de fechas objetivo
     let fechaPago: Date;
 
-    // Si la póliza es de PAGO INMEDIATO, el primer abono vence inmediatamente (fecha actual)
+    // Si la póliza es de PAGO INMEDIATO o sin gracia, primer pago vence hoy
     if (poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO || periodoGracia === 0) {
       fechaPago = new Date();
       fechaPago = new Date(fechaPago.getFullYear(), fechaPago.getMonth(), fechaPago.getDate(), 0, 0, 0, 0);
     } else {
-      // Aplicar el período de gracia normal
+      // Aplicar el período de gracia normal desde fecha de emisión
       fechaPago = new Date(poliza.FechaEmision);
       fechaPago.setDate(fechaPago.getDate() + periodoGracia);
       fechaPago = new Date(fechaPago.getFullYear(), fechaPago.getMonth(), fechaPago.getDate(), 0, 0, 0, 0);
     }
 
     const fechas: Date[] = [];
+    const step = Math.floor(12 / numeroPagos); // Meses entre pagos (entero)
     for (let i = 0; i < numeroPagos; i++) {
       fechas.push(new Date(fechaPago));
-      // Avanza por “frecuencia” (= 12/numeroPagos meses); asume divisor entero de 12
-      const step = 12 / numeroPagos; // mensual/semestral/trimestral/anual...
       const next = new Date(fechaPago);
       next.setMonth(next.getMonth() + step);
       fechaPago = next;
     }
 
-    // 5) Armar esquema con objetivo "histórico" (para marcar atrasos correctamente)
+    const intervaloDias = this.calcularIntervaloDias(numeroPagos);
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+
+    // 5) Armar esquema con montoOriginal (histórico) y montoPendiente (dinámico)
     const esquemaPagos = Array.from({ length: numeroPagos }, (_, i) => ({
       numeroPago: i + 1,
       fechaPago: fechas[i].toISOString(),
-      montoObjetivo: i === 0 ? primerPago : pagosSubsecuentes, // objetivo NOMINAL histórico
+      montoOriginal: i === 0 ? primerPago : pagosSubsecuentes, // Monto histórico que debía pagarse
+      montoPendiente: i === 0 ? primerPago : pagosSubsecuentes, // Monto pendiente actual (se actualizará)
       montoAplicado: 0,
       estado: 'Pendiente' as 'Pendiente' | 'Parcial' | 'Pagado' | 'Pendiente de Validación' | 'Atrasado',
-      pagosRealizados: [] as { montoPagado: number; fechaReal: string }[],
+      pagosRealizados: [] as { montoPagado: number; fechaReal: string; pagoID: number }[],
     }));
 
-    // 6) Traer pagos realizados y separar:
+    // 6) Traer pagos realizados
     const pagosRealizados = await this.pagosPolizaRepository.find({
       where: { PolizaID: poliza.PolizaID },
       relations: ['EstatusPago'],
       order: { FechaPago: 'ASC' },
     });
 
-    // Excluir CANCELADOS (3); “Pendiente de Validación (4)” NO cuenta como pagado
+    // Pagos válidos: excluir CANCELADOS (3), incluir solo PAGADO (1) o validados
     const pagosValidos = pagosRealizados.filter(
       (p) => p.EstatusPago?.IDEstatusPago !== 3 && (p.Validado === true || p.EstatusPago?.IDEstatusPago === 1),
     );
 
-    // 7) Aplicar pagos válidos AL ESQUEMA HISTÓRICO por calendario (secuencial)
+    // 7) Aplicar pagos válidos secuencialmente (modelo waterfall)
+    //    Cada pago se aplica al primer periodo con saldo pendiente
     let pagadoAcumulado = 0;
+    const pagosAplicados = new Set<number>(); // IDs de pagos que fueron aplicados al esquema
+
     for (const p of pagosValidos) {
       let porAplicar = Number(p.MontoPagado || 0);
       if (porAplicar <= 0) continue;
 
+      let pagoFueAplicado = false;
+
       for (let i = 0; i < esquemaPagos.length && porAplicar > 0; i++) {
-        const objetivo = esquemaPagos[i].montoObjetivo;
-        const aplicado = esquemaPagos[i].montoAplicado;
-        const faltante = round2(Math.max(objetivo - aplicado, 0));
+        const periodo = esquemaPagos[i];
+        const faltante = round2(Math.max(periodo.montoOriginal - periodo.montoAplicado, 0));
         if (faltante <= 0) continue;
 
         const aplicarAhora = round2(Math.min(faltante, porAplicar));
-        esquemaPagos[i].montoAplicado = round2(aplicado + aplicarAhora);
-        esquemaPagos[i].pagosRealizados.push({
+        periodo.montoAplicado = round2(periodo.montoAplicado + aplicarAhora);
+        periodo.pagosRealizados.push({
           montoPagado: aplicarAhora,
-          fechaReal: new Date(p.FechaPago).toISOString(), // 🔹 convertir Date → string
+          fechaReal: new Date(p.FechaPago).toISOString(),
+          pagoID: p.PagoID,
         });
         porAplicar = round2(porAplicar - aplicarAhora);
         pagadoAcumulado = round2(pagadoAcumulado + aplicarAhora);
+        pagoFueAplicado = true;
+      }
+
+      if (pagoFueAplicado) {
+        pagosAplicados.add(p.PagoID);
       }
     }
 
-    // 8) Recalcular monto objetivo de los periodos FUTUROS
-    //    Lo ya pasado se queda con su objetivo histórico para poder marcar Atrasos.
-    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
-    const indicesFuturos = esquemaPagos
-      .map((it, i) => ({ i, f: new Date(it.fechaPago) }))
-      .filter(({ f }) => f.getTime() >= hoy.getTime())
+    // 8) Calcular montoPendiente para cada periodo
+    //    - Periodos con pago completo: montoPendiente = 0
+    //    - Periodos con pago parcial: montoPendiente = montoOriginal - montoAplicado
+    //    - Periodos sin pago: redistribuir el saldo restante equitativamente
+    const restanteGlobal = round2(Math.max(primaTotal - pagadoAcumulado, 0));
+
+    // Identificar periodos sin ningún pago aplicado
+    const indicesSinPago = esquemaPagos
+      .map((p, i) => ({ i, aplicado: p.montoAplicado }))
+      .filter(({ aplicado }) => aplicado <= 0)
       .map(({ i }) => i);
 
-    // Saldo restante dinámico (NO contar pendientes de validación como pagados)
-    const restanteGlobal = Math.max(round2(primaTotal - pagadoAcumulado), 0);
-    const futurosCount = Math.max(indicesFuturos.length, 0);
-
-    // Reasignar SOLO futuros: repartir restante en partes iguales
-    if (futurosCount > 0) {
-      const cuota = round2(restanteGlobal / futurosCount);
-      // Para compensar redondeos, reparte y ajusta el último
+    if (indicesSinPago.length > 0 && restanteGlobal > 0) {
+      // Redistribuir el saldo restante equitativamente entre periodos sin pago
+      const cuota = round2(restanteGlobal / indicesSinPago.length);
       let sumaAsignada = 0;
-      indicesFuturos.forEach((idx, k) => {
-        if (k < futurosCount - 1) {
-          esquemaPagos[idx].montoObjetivo = cuota;
+
+      indicesSinPago.forEach((idx, k) => {
+        if (k < indicesSinPago.length - 1) {
+          esquemaPagos[idx].montoPendiente = cuota;
           sumaAsignada = round2(sumaAsignada + cuota);
         } else {
-          // último = restanteGlobal - sumaAsignada (para cerrar exacto)
-          esquemaPagos[idx].montoObjetivo = round2(Math.max(restanteGlobal - sumaAsignada, 0));
+          // Último periodo absorbe diferencia de redondeo
+          esquemaPagos[idx].montoPendiente = round2(restanteGlobal - sumaAsignada);
         }
       });
-    } else {
-      // No hay futuros; si queda restanteGlobal > 0, habrá atrasos/parciales en pasados.
     }
 
-    // 9) Estados finales por periodo
-    const intervaloDias = this.calcularIntervaloDias(numeroPagos);
+    // Actualizar montoPendiente de periodos con pago parcial
+    for (const periodo of esquemaPagos) {
+      if (periodo.montoAplicado > 0 && periodo.montoAplicado < periodo.montoOriginal) {
+        periodo.montoPendiente = round2(periodo.montoOriginal - periodo.montoAplicado);
+      } else if (periodo.montoAplicado >= periodo.montoOriginal) {
+        periodo.montoPendiente = 0;
+      }
+    }
+
+    // 9) Determinar estados finales por periodo
     let conteoAtrasos = 0;
 
     for (const item of esquemaPagos) {
@@ -753,6 +764,7 @@ export class PolizasService {
       const fechaFinPer = new Date(fechaInicioPer);
       fechaFinPer.setDate(fechaFinPer.getDate() + intervaloDias);
 
+      // Verificar si hay pagos pendientes de validación en este periodo
       const tienePendValid = pagosRealizados.some(
         (pr) =>
           new Date(pr.FechaPago).getTime() >= fechaInicioPer.getTime() &&
@@ -760,46 +772,41 @@ export class PolizasService {
           pr.EstatusPago?.IDEstatusPago === 4,
       );
 
-      const faltante = round2(Math.max(item.montoObjetivo - item.montoAplicado, 0));
+      const faltante = round2(item.montoPendiente);
+      const periodoVencido = hoy.getTime() > fechaFinPer.getTime();
 
       if (tienePendValid) {
         item.estado = 'Pendiente de Validación';
       } else if (faltante <= 0.009) {
         item.estado = 'Pagado';
+      } else if (periodoVencido) {
+        // Periodo ya venció y tiene saldo pendiente
+        // Usamos "Parcial" para pagos incompletos (compatible con frontend existente)
+        item.estado = item.montoAplicado > 0 ? 'Parcial' : 'Atrasado';
+        conteoAtrasos++;
       } else {
-        // Si ya pasó el periodo, marcar como Atrasado; si no, Pendiente/Parcial
-        const yaPaso = new Date().getTime() > fechaFinPer.getTime();
-        if (yaPaso) {
-          // Si tiene algo aplicado pero no cumplió => Parcial (pero con atraso)
-          if (item.montoAplicado > 0) {
-            item.estado = 'Parcial';
-          } else {
-            item.estado = 'Atrasado';
-          }
-          conteoAtrasos++;
-        } else {
-          item.estado = item.montoAplicado > 0 ? 'Parcial' : 'Pendiente';
-        }
+        // Periodo aún no vence
+        item.estado = item.montoAplicado > 0 ? 'Parcial' : 'Pendiente';
       }
     }
 
     if (conteoAtrasos > 0) {
+      const mensajeAtrasoPeriodos = `CLIENTE PRESENTA ATRASO DE ${conteoAtrasos} PERIODO${conteoAtrasos > 1 ? 'S' : ''}`;
       mensajeAtraso = mensajeAtraso
-        ? `${mensajeAtraso}. CLIENTE PRESENTA ATRASO DE ${conteoAtrasos} PERIODOS`
-        : `CLIENTE PRESENTA ATRASO DE ${conteoAtrasos} PERIODOS`;
+        ? `${mensajeAtraso}. ${mensajeAtrasoPeriodos}`
+        : mensajeAtrasoPeriodos;
     }
 
-    // 10) Pagos fuera de rango (info)
-    //     Ya no “rompen” el esquema: se aplican a saldo global y luego redistribuimos futuros.
-    //     Aun así, devolvemos la lista informativa si quieres mostrarla.
-    const pagosFueraDeRango = pagosValidos.filter((pago) =>
-      esquemaPagos.every((slot) => {
-        const ini = new Date(slot.fechaPago);
-        const fin = new Date(ini); fin.setDate(fin.getDate() + intervaloDias);
-        const t = new Date(pago.FechaPago).getTime();
-        return !(t >= ini.getTime() && t < fin.getTime());
-      }),
-    );
+    // 10) Identificar pagos que exceden el esquema (anticipo/excedente)
+    //     Son pagos válidos que NO fueron aplicados completamente al esquema
+    const pagosExcedentes = pagosValidos
+      .filter((p) => !pagosAplicados.has(p.PagoID))
+      .map((p) => ({
+        pagoPolizaID: p.PagoID,
+        montoPagado: Number(p.MontoPagado),
+        fechaPago: p.FechaPago,
+        motivo: 'Pago no aplicado al esquema (posible duplicado o error)',
+      }));
 
     // Totales
     const totalPagado = round2(pagadoAcumulado);
@@ -807,10 +814,21 @@ export class PolizasService {
     return {
       fechaInicio: poliza.FechaInicio,
       fechaFin: poliza.FechaFin,
-      esquemaPagos,
-      pagosFueraDeRango: pagosFueraDeRango.map((p) => ({
-        montoPagado: Number(p.MontoPagado),
-        fechaPago: p.FechaPago,
+      // Mantener estructura original del esquemaPagos para compatibilidad con frontend
+      esquemaPagos: esquemaPagos.map((p) => ({
+        numeroPago: p.numeroPago,
+        fechaPago: p.fechaPago,
+        montoObjetivo: p.montoPendiente, // Frontend espera "montoObjetivo" (ahora es el pendiente dinámico)
+        montoAplicado: p.montoAplicado,
+        estado: p.estado,
+        pagosRealizados: p.pagosRealizados.map((pr) => ({
+          montoPagado: pr.montoPagado,
+          fechaReal: pr.fechaReal,
+        })),
+      })),
+      pagosFueraDeRango: pagosExcedentes.map((p) => ({
+        montoPagado: p.montoPagado,
+        fechaPago: p.fechaPago,
       })),
       totalPrima: round2(primaTotal),
       totalPagado,
@@ -966,23 +984,45 @@ export class PolizasService {
 
     const primerPagoRecibido = pagosRealizados > 0;
     const periodoGracia = Number(poliza.cotizacion?.PeriodoGracia || 0);
-    const fechaInicio = new Date(poliza.FechaInicio);
-    const fechaLimiteGracia = new Date(fechaInicio);
-    fechaLimiteGracia.setDate(fechaLimiteGracia.getDate() + periodoGracia);
 
     let estadoNuevo = poliza.EstadoPoliza;
 
+    // Pago recibido → ACTIVA (desde cualquier estado pendiente)
     if (
       primerPagoRecibido &&
       [ESTADOS_POLIZA.PENDIENTE, ESTADOS_POLIZA.PAGO_INMEDIATO, ESTADOS_POLIZA.PERIODO_GRACIA].includes(poliza.EstadoPoliza as any)
     ) {
       estadoNuevo = ESTADOS_POLIZA.ACTIVA;
-    } else if (
-      !primerPagoRecibido &&
-      hoy > fechaLimiteGracia &&
-      [ESTADOS_POLIZA.PENDIENTE, ESTADOS_POLIZA.PERIODO_GRACIA, ESTADOS_POLIZA.PAGO_INMEDIATO].includes(poliza.EstadoPoliza as any)
-    ) {
-      estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+    }
+    // PAGO INMEDIATO → VENCIDA solo después de 2 días desde emisión
+    else if (poliza.EstadoPoliza === ESTADOS_POLIZA.PAGO_INMEDIATO && !primerPagoRecibido) {
+      const fechaEmision = new Date(poliza.FechaEmision);
+      const fechaLimitePagoInmediato = new Date(fechaEmision);
+      fechaLimitePagoInmediato.setDate(fechaLimitePagoInmediato.getDate() + 2);
+
+      if (hoy > fechaLimitePagoInmediato) {
+        estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+      }
+    }
+    // PERIODO DE GRACIA → VENCIDA después de expirar periodo
+    else if (poliza.EstadoPoliza === ESTADOS_POLIZA.PERIODO_GRACIA && !primerPagoRecibido && periodoGracia > 0) {
+      const fechaInicio = new Date(poliza.FechaInicio);
+      const fechaLimiteGracia = new Date(fechaInicio);
+      fechaLimiteGracia.setDate(fechaLimiteGracia.getDate() + periodoGracia);
+
+      if (hoy > fechaLimiteGracia) {
+        estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+      }
+    }
+    // PENDIENTE → VENCIDA después de expirar periodo
+    else if (poliza.EstadoPoliza === ESTADOS_POLIZA.PENDIENTE && !primerPagoRecibido && periodoGracia > 0) {
+      const fechaInicio = new Date(poliza.FechaInicio);
+      const fechaLimiteGracia = new Date(fechaInicio);
+      fechaLimiteGracia.setDate(fechaLimiteGracia.getDate() + periodoGracia);
+
+      if (hoy > fechaLimiteGracia) {
+        estadoNuevo = ESTADOS_POLIZA.VENCIDA;
+      }
     }
 
     if (estadoNuevo !== poliza.EstadoPoliza) {
