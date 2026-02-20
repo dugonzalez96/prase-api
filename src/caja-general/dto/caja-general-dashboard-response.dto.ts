@@ -79,6 +79,7 @@ export interface CajaGeneralDashboardResponseDto {
     transferencias: number;
     tarjeta: number;
     depositos: number;
+    diferencia: number;
   }[];
 
   // Sección 5: Inicios de usuario

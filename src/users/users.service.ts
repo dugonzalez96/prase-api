@@ -93,6 +93,7 @@ export class UsersService {
       NombreUsuario: username,
       Contrasena: hashedPassword,
       EmpleadoID: empleadoID || null,
+      SucursalID: sucursalID || null,
     });
 
     const resUser = await this.usersRepository.save(newUser);
@@ -120,6 +121,7 @@ export class UsersService {
     id: number,
     username?: string,
     password?: string,
+    idGroup?: number,
     empleadoID?: number,
     sucursalID?: number,
   ): Promise<usuarios> {
@@ -173,6 +175,31 @@ export class UsersService {
 
     // Guardar cambios en la base de datos
     await this.usersRepository.save(user);
+
+    // Actualizar grupo si se envía
+    if (idGroup !== undefined) {
+      const group = await this.gruposRepository.findOne({
+        where: { id: idGroup },
+      });
+      if (!group) {
+        throw new HttpException('Grupo no encontrado', HttpStatus.NOT_FOUND);
+      }
+
+      const existingRelation = await this.gruposUsuariosRepository.findOne({
+        where: { usuarios: { UsuarioID: id } },
+      });
+
+      if (existingRelation) {
+        existingRelation.grupos = group;
+        await this.gruposUsuariosRepository.save(existingRelation);
+      } else {
+        const newRelation = this.gruposUsuariosRepository.create({
+          grupos: group,
+          usuarios: user,
+        });
+        await this.gruposUsuariosRepository.save(newRelation);
+      }
+    }
 
     // Retornar el usuario actualizado
     return user;

@@ -340,6 +340,7 @@ export class CajaGeneralService {
             transferencias: Number(c.TotalTransferencia || 0),
             tarjeta: Number(c.TotalPagoConTarjeta || 0),
             depositos: 0, // Por ahora 0, se puede agregar TotalDepositoCapturado si existe
+            diferencia: Number(c.Diferencia || 0),
         }));
 
         // 6) Inicios
@@ -405,7 +406,7 @@ export class CajaGeneralService {
                 const saldoInicialHist = Number(cg.SaldoAnterior || 0);
                 const totalEntradasHist = Number(cg.TotalIngresos || 0);
                 const totalEgresosHist = Number(cg.TotalEgresos || 0);
-                const entrego = Number(cg.SaldoReal || cg.SaldoFinal || 0);
+                const entrego = Number(cg.SaldoReal ?? cg.SaldoFinal ?? 0);
                 const saldoEsperado = Number(cg.SaldoEsperado || 0);
                 // diferencia = lo que entregó - lo que debía entregar
                 const diferencia = Number((entrego - saldoEsperado).toFixed(2));
