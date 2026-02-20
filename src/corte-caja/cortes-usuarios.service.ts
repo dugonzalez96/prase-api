@@ -696,6 +696,7 @@ export class CortesUsuariosService {
     const inicioCaja = await this.iniciosCajaRepository.findOne({
       where: { Usuario: { UsuarioID: usuarioID } },
       relations: ['Sucursal'],
+      order: { FechaInicio: 'DESC' },
     });
 
     if (!inicioCaja) {
