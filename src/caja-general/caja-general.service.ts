@@ -337,8 +337,8 @@ export class CajaGeneralService {
             estadoCajaGeneral: cuadreDelDia ? 'Aplicado' : 'Pendiente',
             // ⭐ NUEVO DESGLOSE POR FORMA DE PAGO
             efectivoEntregado: Number(c.TotalEfectivoCapturado || 0),
-            transferencias: Number(c.TotalTransferenciaCapturado || 0),
-            tarjeta: Number(c.TotalTarjetaCapturado || 0),
+            transferencias: Number(c.TotalTransferencia || 0),
+            tarjeta: Number(c.TotalPagoConTarjeta || 0),
             depositos: 0, // Por ahora 0, se puede agregar TotalDepositoCapturado si existe
         }));
 
