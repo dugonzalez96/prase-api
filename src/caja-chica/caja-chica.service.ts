@@ -1026,7 +1026,11 @@ export class CajaChicaService {
             if (cuadre.CortesUsuarios && cuadre.CortesUsuarios.length > 0) {
                 totalIngresosRecalculado = Number(
                     cuadre.CortesUsuarios.reduce(
-                        (sum, corte) => sum + Number(corte.TotalIngresos ?? 0),
+                        (sum, corte) =>
+                            sum +
+                            Number(corte.TotalIngresosEfectivo ?? 0) +
+                            Number(corte.TotalIngresosTarjeta ?? 0) +
+                            Number(corte.TotalIngresosTransferencia ?? 0),
                         0,
                     ).toFixed(2),
                 );
@@ -1074,7 +1078,11 @@ export class CajaChicaService {
             if (cuadre.CortesUsuarios && cuadre.CortesUsuarios.length > 0) {
                 totalIngresosRecalculado = Number(
                     cuadre.CortesUsuarios.reduce(
-                        (sum, corte) => sum + Number(corte.TotalIngresos ?? 0),
+                        (sum, corte) =>
+                            sum +
+                            Number(corte.TotalIngresosEfectivo ?? 0) +
+                            Number(corte.TotalIngresosTarjeta ?? 0) +
+                            Number(corte.TotalIngresosTransferencia ?? 0),
                         0,
                     ).toFixed(2),
                 );
