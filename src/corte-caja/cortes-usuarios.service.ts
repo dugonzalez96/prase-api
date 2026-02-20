@@ -729,6 +729,7 @@ export class CortesUsuariosService {
       .where('u.UsuarioID = :usuarioID', { usuarioID })
       .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
       .andWhere('t.CorteUsuarioID IS NULL')
+      .andWhere('(t.EsGeneral = false OR t.EsGeneral IS NULL)')
       .andWhere('t.FormaPago IN (:...formasPago)', { formasPago: ['Transferencia', 'Deposito', 'Tarjeta'] })
       .andWhere('t.Validado = :validado', { validado: false })
       .getMany();
@@ -747,6 +748,7 @@ export class CortesUsuariosService {
       .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
       .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
       .andWhere('t.CorteUsuarioID IS NULL')
+      .andWhere('(t.EsGeneral = false OR t.EsGeneral IS NULL)')
       .getMany();
 
     const egresos = await this.transaccionesRepository
@@ -756,6 +758,7 @@ export class CortesUsuariosService {
       .andWhere('u.UsuarioID = :usuarioID', { usuarioID })
       .andWhere('DATE(t.FechaTransaccion) >= :fecha', { fecha: fechaBusqueda })
       .andWhere('t.CorteUsuarioID IS NULL')
+      .andWhere('(t.EsGeneral = false OR t.EsGeneral IS NULL)')
       .getMany();
 
     const pagosPoliza = await this.pagosPolizaRepository
@@ -1000,31 +1003,30 @@ export class CortesUsuariosService {
     console.log(`🔍 Buscando transacciones entre ${fechaInicio} y ${fechaFin}`);
 
     // 🔹 Obtener los ingresos del usuario en la fecha del corte
-    const ingresos =
-      (await this.transaccionesRepository.find({
-        where: {
-          TipoTransaccion: 'Ingreso',
-          UsuarioCreo: { UsuarioID: corte.usuarioID.UsuarioID },
-          FechaTransaccion: Between(fechaInicio, fechaFin),
-        },
-      })) || [];
+    const ingresos = await this.transaccionesRepository
+      .createQueryBuilder('t')
+      .leftJoin('t.UsuarioCreo', 'u')
+      .where('t.TipoTransaccion = :tipo', { tipo: 'Ingreso' })
+      .andWhere('u.UsuarioID = :usuarioID', { usuarioID: corte.usuarioID.UsuarioID })
+      .andWhere('t.FechaTransaccion BETWEEN :fechaInicio AND :fechaFin', { fechaInicio, fechaFin })
+      .andWhere('(t.EsGeneral = false OR t.EsGeneral IS NULL)')
+      .getMany();
 
-    const egresos =
-      (await this.transaccionesRepository.find({
-        where: {
-          TipoTransaccion: 'Egreso',
-          UsuarioCreo: { UsuarioID: corte.usuarioID.UsuarioID },
-          FechaTransaccion: Between(fechaInicio, fechaFin),
-        },
-      })) || [];
+    const egresos = await this.transaccionesRepository
+      .createQueryBuilder('t')
+      .leftJoin('t.UsuarioCreo', 'u')
+      .where('t.TipoTransaccion = :tipo', { tipo: 'Egreso' })
+      .andWhere('u.UsuarioID = :usuarioID', { usuarioID: corte.usuarioID.UsuarioID })
+      .andWhere('t.FechaTransaccion BETWEEN :fechaInicio AND :fechaFin', { fechaInicio, fechaFin })
+      .andWhere('(t.EsGeneral = false OR t.EsGeneral IS NULL)')
+      .getMany();
 
-    // 🔹 Obtener pagos de póliza del usuario en la fecha del corte
+    // 🔹 Obtener pagos de póliza amarrados a este corte
     const pagosPoliza =
       (await this.pagosPolizaRepository.find({
         where: {
-          MotivoCancelacion: null,
-          Usuario: { UsuarioID: corte.usuarioID.UsuarioID },
-          FechaPago: Between(fechaInicio, fechaFin),
+          MotivoCancelacion: IsNull(),
+          CorteUsuario: { CorteUsuarioID: corteID },
         },
         relations: ['MetodoPago'],
       })) || [];
